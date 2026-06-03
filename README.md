@@ -4,6 +4,23 @@
 
 命名来自 `Claude-Shell`的缩写，该项目是由 [cc-claude](https://github.com/gitByEOS/open-part-skills) 发展而来。
 
+
+## 区别
+
+|  | `claude` 启动 |  `clash` 启动 |
+|:---:|:---:|:---:|
+| 模型选择 | 进入后切换 | 启动 TUI 选择 |
+| 渠道切换 | 手动配置 | 配置引导 |
+| Team 模式 | 手动配置 | 自动开启 |
+| 免确认模式 | 手动配置 | 自动开启 |
+| 凭据存储 | 明文 | 存储 |
+| 连通测试 | 无 | 自动测试 |
+| 启动可用 | 不确定 | 确定 |
+
+## 启动效果图
+VS Code 为例：
+![clash-launch](docs/clash-launch.png)
+
 ## 平台支持
 
 
