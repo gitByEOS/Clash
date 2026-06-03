@@ -9,6 +9,9 @@ use std::env;
 use std::io::Write;
 use std::process;
 
+const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+const DEFAULT_RAW_BASE_URL: &str = "https://raw.githubusercontent.com/gitByEOS/Clash/master";
+
 fn print_red(msg: &str) {
     print!("\x1b[1;31m{}\x1b[0m\n", msg);
 }
@@ -20,6 +23,78 @@ fn print_yellow(msg: &str) {
 }
 fn print_cyan(msg: &str) {
     print!("\x1b[1;36m{}\x1b[0m\n", msg);
+}
+
+/// ── version / update ────────────────────────────────────────────────
+
+fn raw_base_url() -> String {
+    env::var("CLASH_INSTALL_BASE_URL").unwrap_or_else(|_| DEFAULT_RAW_BASE_URL.to_string())
+}
+
+fn fetch_text(url: &str) -> Result<String, String> {
+    let output = process::Command::new("curl")
+        .arg("-fsSL")
+        .arg(url)
+        .output()
+        .map_err(|e| format!("无法执行 curl: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!("下载失败: {url}"));
+    }
+
+    String::from_utf8(output.stdout).map_err(|_| "远端内容不是 UTF-8".to_string())
+}
+
+fn latest_version_from_cargo_toml(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let line = line.trim();
+        let (_, value) = line.split_once('=')?;
+        if line.starts_with("version") {
+            Some(format!("v{}", value.trim().trim_matches('"')))
+        } else {
+            None
+        }
+    })
+}
+
+fn do_version() {
+    println!("{}", APP_VERSION);
+}
+
+fn do_update() -> Result<(), ()> {
+    let base_url = raw_base_url();
+    let cargo_toml_url = format!("{base_url}/Cargo.toml");
+    let cargo_toml = fetch_text(&cargo_toml_url).map_err(|err| {
+        print_red(&err);
+    })?;
+    let latest = latest_version_from_cargo_toml(&cargo_toml).ok_or_else(|| {
+        print_red("无法从 Cargo.toml 读取最新版本");
+    })?;
+
+    if latest == APP_VERSION {
+        print_green(&format!("已是最新版本: {}", APP_VERSION));
+        return Ok(());
+    }
+
+    print_cyan(&format!("发现新版本: {} -> {}", APP_VERSION, latest));
+    let install_url = format!("{base_url}/install.sh");
+    let status = process::Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "curl -fsSL '{}' | bash",
+            install_url.replace('\'', "'\\''")
+        ))
+        .status()
+        .map_err(|e| {
+            print_red(&format!("无法执行安装脚本: {e}"));
+        })?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        print_red("更新失败");
+        Err(())
+    }
 }
 
 /// ── config ─────────────────────────────────────────────────────────
@@ -260,8 +335,7 @@ fn do_change_token(new_token: &str) -> Result<(), ()> {
         return Err(());
     }
 
-    cfg.auth_token_encrypted =
-        crypto::encrypt_token(new_token).map_err(|_| ())?;
+    cfg.auth_token_encrypted = crypto::encrypt_token(new_token).map_err(|_| ())?;
     config::write_config(&cfg).map_err(|_| ())?;
     print_green("API Key 已更新");
     auto_test_after_config()
@@ -307,7 +381,11 @@ fn run_model_probes(ctx: &api_test::TestContext) -> bool {
     }
 
     if failed > 0 {
-        print_red(&format!("{}/{} 个模型连通测试失败", failed, ctx.models.len()));
+        print_red(&format!(
+            "{}/{} 个模型连通测试失败",
+            failed,
+            ctx.models.len()
+        ));
         flush_stdout();
         return false;
     }
@@ -473,6 +551,14 @@ fn main() {
     }
 
     match args[0].as_str() {
+        "version" => {
+            do_version();
+        }
+        "update" => {
+            if let Err(()) = do_update() {
+                process::exit(1);
+            }
+        }
         "run" => {
             if let Err(()) = do_select_and_run(&args[1..]) {
                 process::exit(1);

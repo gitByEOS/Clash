@@ -2,7 +2,7 @@
 
 `clash` 是 Claude Code 的启动器，用于快速切换 Anthropic 兼容 API 渠道和模型。
 
-命名含义来自 `Claude-Shell的缩写`，表示包在 Claude Code 外层的命令行启动器，该项目是由 [cc-claude](https://github.com/gitByEOS/open-part-skills) 发展而来。
+命名来自 `Claude-Shell`的缩写，该项目是由 [cc-claude](https://github.com/gitByEOS/open-part-skills) 发展而来。
 
 ## 平台支持
 
@@ -58,6 +58,8 @@ clash config --models model-a,model-b
 ```bash
 clash                  # 选模型并启动，同 clash run
 clash run              # 选模型并启动 Claude Code
+clash version          # 查看当前版本
+clash update           # 检查 Cargo.toml，发现新版本后自动更新
 clash config           # 查看当前配置
 clash reset            # 删除配置文件
 clash test                    # 对 MODELS 列表逐个执行连通测试（不指定 --model 时）

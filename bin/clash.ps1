@@ -10,6 +10,62 @@ param(
 $ErrorActionPreference = "Stop"
 
 $AppName = "clash"
+$AppVersion = "v0.1.0"
+$DefaultRawBaseUrl = "https://raw.githubusercontent.com/gitByEOS/Clash/master"
+
+function Get-RawBaseUrl {
+    if ($env:CLASH_INSTALL_BASE_URL) {
+        return $env:CLASH_INSTALL_BASE_URL.TrimEnd("/")
+    }
+
+    return $DefaultRawBaseUrl
+}
+
+function Get-RemoteText([string]$Url) {
+    if ($Url.StartsWith("file://")) {
+        $path = [Uri]::UnescapeDataString($Url.Substring("file://".Length))
+        return Get-Content -Raw -Path $path
+    }
+
+    return (Invoke-WebRequest -UseBasicParsing -Uri $Url).Content
+}
+
+function Get-LatestVersionFromCargoToml([string]$Content) {
+    foreach ($line in $Content -split "`n") {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^version\s*=\s*"([^"]+)"') {
+            return "v$($Matches[1])"
+        }
+    }
+
+    return $null
+}
+
+function Show-Version {
+    Write-Host $AppVersion
+}
+
+function Update-Clash {
+    $baseUrl = Get-RawBaseUrl
+    $cargoTomlUrl = "$baseUrl/Cargo.toml"
+    $cargoToml = Get-RemoteText $cargoTomlUrl
+    $latest = Get-LatestVersionFromCargoToml $cargoToml
+
+    if (-not $latest) {
+        throw "无法从 Cargo.toml 读取最新版本"
+    }
+
+    if ($latest -eq $AppVersion) {
+        Write-Ok "已是最新版本: $AppVersion"
+        return
+    }
+
+    Write-Info "发现新版本: $AppVersion -> $latest"
+    $installUrl = "$baseUrl/install.ps1"
+    $installScript = Get-RemoteText $installUrl
+    $installer = [scriptblock]::Create($installScript)
+    & $installer -RawBaseUrl $baseUrl
+}
 
 function Get-ConfigDir {
     if ($env:APPDATA) {
@@ -778,6 +834,8 @@ $rest = if ($CliArgs.Count -gt 1) { $CliArgs[1..($CliArgs.Count - 1)] } else { @
 
 try {
     switch ($command) {
+        "version" { Show-Version }
+        "update" { Update-Clash }
         "run" { Invoke-Claude $rest }
         "config" { Invoke-Config $rest }
         "reset" { Remove-Config }
