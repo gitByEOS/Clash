@@ -1,5 +1,6 @@
 use crate::config;
 use crate::crypto;
+use crate::parse_auth_args;
 use std::io;
 use std::process::{Command, Stdio};
 
@@ -21,43 +22,11 @@ pub struct ModelProbeResult {
 }
 
 pub fn parse_test_args(args: &[String]) -> Result<TestOptions, ()> {
-    let mut base_url = None;
-    let mut auth_key = None;
-    let mut model = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--url" => {
-                if i + 1 >= args.len() {
-                    return Err(());
-                }
-                i += 1;
-                base_url = Some(args[i].clone());
-            }
-            "--key" => {
-                if i + 1 >= args.len() {
-                    return Err(());
-                }
-                i += 1;
-                auth_key = Some(args[i].clone());
-            }
-            "--model" => {
-                if i + 1 >= args.len() {
-                    return Err(());
-                }
-                i += 1;
-                model = Some(args[i].clone());
-            }
-            _ => return Err(()),
-        }
-        i += 1;
-    }
-
+    let map = parse_auth_args(args, &["--url", "--key", "--model"], false)?;
     Ok(TestOptions {
-        base_url,
-        auth_key,
-        model,
+        base_url: map.get("--url").cloned(),
+        auth_key: map.get("--key").cloned(),
+        model: map.get("--model").cloned(),
     })
 }
 

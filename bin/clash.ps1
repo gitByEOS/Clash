@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $AppName = "clash"
-$AppVersion = "v0.1.0"
+$AppVersion = "v0.1.1"
 $DefaultRawBaseUrl = "https://raw.githubusercontent.com/gitByEOS/Clash/master"
 
 function Get-RawBaseUrl {
@@ -296,21 +296,21 @@ function Parse-ConfigArgs([string[]]$InputArgs) {
 }
 
 function Invoke-ConfigInteractive {
-    Write-Info "Clash 配置向导"
+    Write-Info "Clash 配置向导（以 DeepSeek 为例）"
 
-    $baseUrl = Read-Host "请输入 Anthropic 兼容 API 地址"
+    $baseUrl = Read-Host "API 地址 (如 https://api.deepseek.com/anthropic)"
     if (-not $baseUrl) {
         throw "地址不能为空"
     }
 
-    $token = Read-Host "请输入 API Key"
+    $token = Read-Host "API Key (如 sk-c9cbf*******cd7a)"
     if (-not $token) {
         throw "Key 不能为空"
     }
 
     $models = @()
     while ($models.Count -eq 0) {
-        $modelInput = Read-Host "请输入模型列表，多个模型用逗号分隔"
+        $modelInput = Read-Host "模型列表 (如 deepseek-v4-pro, deepseek-v4-flash)"
         $models = Normalize-Models $modelInput
         if ($models.Count -eq 0) {
             Write-Err "模型列表不能为空"

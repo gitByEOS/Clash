@@ -1,6 +1,6 @@
 use crate::fuzzy;
 use crossterm::{
-    cursor::{MoveToColumn, RestorePosition, SavePosition, Show},
+    cursor::{MoveToColumn, MoveUp, RestorePosition, SavePosition, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     style::{
@@ -121,13 +121,12 @@ fn is_bash_shell() -> bool {
 /// 选中标记区固定列数，与终端实际渲染宽度解耦
 const MARKER_END_COL: u16 = 2;
 
-/// fzf-style model selector.
-///
-/// Layout (alternate screen):
-/// clash> sonnet
-/// 1/3 ─────────────────────────
-/// 选择模型 | ↑/↓ 选择, Enter 确认, Esc 退出
-/// → model  claude-sonnet-4-20250514
+// fzf-style model selector.
+// Layout (alternate screen):
+// clash> sonnet
+// 1/3 ─────────────────────────
+// 选择模型 | ↑/↓ 选择, Enter 确认, Esc 退出
+// → model  claude-sonnet-4-20250514
 
 pub fn select_model(models: &[String]) -> Option<String> {
     if models.is_empty() {
@@ -215,6 +214,14 @@ fn run_tui(models: &[String]) -> Option<String> {
         return Some(models[0].clone());
     }
     let mut out = stdout();
+
+    // 预留足够垂直空间，避免底部截断
+    let needed_lines = 13; // prompt + info + help + 最多10行模型
+    for _ in 0..needed_lines {
+        writeln!(out).ok();
+    }
+    execute!(out, MoveUp(needed_lines)).ok();
+
     let _ = execute!(
         out,
         ResetColor,
@@ -391,9 +398,8 @@ fn render(out: &mut impl Write, state: &mut State) {
     render_help(out, frame_width, theme);
 
     let mut line_count = 3usize;
-    let mut shown = 0;
 
-    for i in state.offset..state.filtered.len() {
+    for (shown, i) in (state.offset..state.filtered.len()).enumerate() {
         if shown >= state.height {
             break;
         }
@@ -407,7 +413,6 @@ fn render(out: &mut impl Write, state: &mut State) {
             theme,
         );
         line_count += 1;
-        shown += 1;
     }
 
     state.total_lines = line_count;

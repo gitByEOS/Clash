@@ -196,49 +196,47 @@ fn chrono_like_timestamp() -> String {
 }
 
 fn utc_timestamp() -> String {
-    let now = std::time::SystemTime::now();
-    let total_secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let days = total_secs / 86400;
-    let remaining = total_secs % 86400;
-    let hours = remaining / 3600;
-    let minutes = (remaining % 3600) / 60;
-    let seconds = remaining % 60;
+    let total_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
-    // Calculate year/month/day from days since 1970-01-01
+    let (hours, minutes, seconds) = {
+        let h = total_secs / 3600 % 24;
+        let m = total_secs / 60 % 60;
+        let s = total_secs % 60;
+        (h, m, s)
+    };
+
+    // days since 1970-01-01
+    let mut days = total_secs / 86400;
     let mut year = 1970u64;
-    let mut d = days;
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if d < days_in_year {
-            break;
-        }
-        d -= days_in_year;
+
+    while days >= 365 {
+        let leap = is_leap_year(year);
+        days -= if leap { 366 } else { 365 };
         year += 1;
     }
-    let month_days = if is_leap_year(year) {
+
+    let leap = is_leap_year(year);
+    let month_days: [u64; 12] = if leap {
         [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
-    let mut month = 1u64;
-    let mut dm = d;
-    for (i, &md) in month_days.iter().enumerate() {
-        if dm < md {
-            month = i as u64 + 1;
-            break;
-        }
-        dm -= md;
-    }
-    let day = dm + 1;
 
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        year, month, day, hours, minutes, seconds
-    )
+    let (month, day) = month_days
+        .iter()
+        .enumerate()
+        .fold((1, days + 1), |(m, d), (i, md)| {
+            if d > *md { (i as u64 + 2, d - *md) } else { (m, d) }
+        });
+
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
 }
 
 fn is_leap_year(year: u64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 #[cfg(test)]

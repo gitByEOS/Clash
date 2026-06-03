@@ -5,6 +5,7 @@ mod fuzzy;
 mod tui;
 
 use config::ClashConfig;
+use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::process;
@@ -13,19 +14,19 @@ const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const DEFAULT_RAW_BASE_URL: &str = "https://raw.githubusercontent.com/gitByEOS/Clash/master";
 
 fn print_red(msg: &str) {
-    print!("\x1b[1;31m{}\x1b[0m\n", msg);
+    println!("\x1b[1;31m{}\x1b[0m", msg);
 }
 fn print_green(msg: &str) {
-    print!("\x1b[1;32m{}\x1b[0m\n", msg);
+    println!("\x1b[1;32m{}\x1b[0m", msg);
 }
 fn print_yellow(msg: &str) {
-    print!("\x1b[1;33m{}\x1b[0m\n", msg);
+    println!("\x1b[1;33m{}\x1b[0m", msg);
 }
 fn print_cyan(msg: &str) {
-    print!("\x1b[1;36m{}\x1b[0m\n", msg);
+    println!("\x1b[1;36m{}\x1b[0m", msg);
 }
 
-/// ── version / update ────────────────────────────────────────────────
+// ── version / update ────────────────────────────────────────────────
 
 fn raw_base_url() -> String {
     env::var("CLASH_INSTALL_BASE_URL").unwrap_or_else(|_| DEFAULT_RAW_BASE_URL.to_string())
@@ -97,7 +98,7 @@ fn do_update() -> Result<(), ()> {
     }
 }
 
-/// ── config ─────────────────────────────────────────────────────────
+// ── config ─────────────────────────────────────────────────────────
 
 struct ConfigSetArgs {
     base_url: Option<String>,
@@ -105,50 +106,40 @@ struct ConfigSetArgs {
     models: Option<String>,
 }
 
-fn parse_config_set_args(args: &[String]) -> Result<ConfigSetArgs, ()> {
-    let mut base_url = None;
-    let mut auth_key = None;
-    let mut models = None;
-
+/// 通用参数解析：遍历 args，遇 --xxx 取下一元素为值
+#[allow(clippy::result_unit_err)]
+pub fn parse_auth_args(args: &[String], flags: &[&str], verbose: bool) -> Result<HashMap<String, String>, ()> {
+    let mut result = HashMap::new();
     let mut i = 0;
+
     while i < args.len() {
-        match args[i].as_str() {
-            "--url" => {
-                if i + 1 >= args.len() {
-                    print_red("--url 缺少值");
-                    return Err(());
-                }
-                i += 1;
-                base_url = Some(args[i].clone());
+        let flag = &args[i];
+        if !flags.contains(&flag.as_str()) {
+            if verbose {
+                print_red(&format!("未知参数: {}", flag));
             }
-            "--key" => {
-                if i + 1 >= args.len() {
-                    print_red("--key 缺少值");
-                    return Err(());
-                }
-                i += 1;
-                auth_key = Some(args[i].clone());
-            }
-            "--models" => {
-                if i + 1 >= args.len() {
-                    print_red("--models 缺少值");
-                    return Err(());
-                }
-                i += 1;
-                models = Some(args[i].clone());
-            }
-            other => {
-                print_red(&format!("未知参数: {}", other));
-                return Err(());
-            }
+            return Err(());
         }
+        if i + 1 >= args.len() {
+            if verbose {
+                print_red(&format!("{} 缺少值", flag));
+            }
+            return Err(());
+        }
+        i += 1;
+        result.insert(flag.clone(), args[i].clone());
         i += 1;
     }
 
+    Ok(result)
+}
+
+fn parse_config_set_args(args: &[String]) -> Result<ConfigSetArgs, ()> {
+    let map = parse_auth_args(args, &["--url", "--key", "--models"], true)?;
     Ok(ConfigSetArgs {
-        base_url,
-        auth_key,
-        models,
+        base_url: map.get("--url").cloned(),
+        auth_key: map.get("--key").cloned(),
+        models: map.get("--models").cloned(),
     })
 }
 
@@ -168,10 +159,10 @@ fn save_config(base_url: String, auth_token: String, models: Vec<String>) -> Res
 }
 
 fn do_configure_interactive() -> Result<(), ()> {
-    print_cyan("Clash 配置向导");
+    print_cyan("Clash 配置向导（以 DeepSeek 为例）");
 
     let mut buf = String::new();
-    print!("请输入 Anthropic 兼容 API 地址\n> ");
+    print!("API 地址 (如 https://api.deepseek.com/anthropic)\n> ");
     std::io::stdout().flush().unwrap();
     std::io::stdin().read_line(&mut buf).unwrap();
     let base_url = buf.trim().to_string();
@@ -181,7 +172,7 @@ fn do_configure_interactive() -> Result<(), ()> {
     }
 
     buf.clear();
-    print!("请输入 API Key\n> ");
+    print!("API Key (如 sk-c9cbf*******cd7a)\n> ");
     std::io::stdout().flush().unwrap();
     std::io::stdin().read_line(&mut buf).unwrap();
     let auth_token = buf.trim().to_string();
@@ -193,7 +184,7 @@ fn do_configure_interactive() -> Result<(), ()> {
     let mut model_list = Vec::new();
     while model_list.is_empty() {
         buf.clear();
-        print!("请输入模型列表，多个模型用逗号分隔\n> ");
+        print!("模型列表 (如 deepseek-v4-pro, deepseek-v4-flash)\n> ");
         std::io::stdout().flush().unwrap();
         std::io::stdin().read_line(&mut buf).unwrap();
         model_list = config::normalize_models(buf.trim());
@@ -300,7 +291,7 @@ fn do_reset() -> Result<(), ()> {
     Ok(())
 }
 
-/// ── add-model ──────────────────────────────────────────────────────
+// ── add-model ──────────────────────────────────────────────────────
 
 fn do_add_model(new_model: &str) -> Result<(), ()> {
     let mut cfg = config::read_config().map_err(|_| {
@@ -323,7 +314,7 @@ fn do_add_model(new_model: &str) -> Result<(), ()> {
     auto_test_after_config()
 }
 
-/// ── change-token ───────────────────────────────────────────────────
+// ── change-token ───────────────────────────────────────────────────
 
 fn do_change_token(new_token: &str) -> Result<(), ()> {
     let mut cfg = config::read_config().map_err(|_| {
@@ -341,7 +332,7 @@ fn do_change_token(new_token: &str) -> Result<(), ()> {
     auto_test_after_config()
 }
 
-/// ── test ───────────────────────────────────────────────────────────
+// ── test ───────────────────────────────────────────────────────────
 
 fn should_skip_auto_test() -> bool {
     matches!(
@@ -446,7 +437,7 @@ fn do_test(args: &[String]) -> Result<(), ()> {
     }
 }
 
-/// ── select and run ─────────────────────────────────────────────────
+// ── select and run ─────────────────────────────────────────────────
 
 fn do_select_and_run(extra_args: &[String]) -> Result<(), ()> {
     let mut cfg = match config::read_config() {
@@ -468,7 +459,7 @@ fn do_select_and_run(extra_args: &[String]) -> Result<(), ()> {
         print_red("无法解密 API Key");
     })?;
 
-    let model = tui::select_model(&cfg.models).ok_or_else(|| ())?;
+    let model = tui::select_model(&cfg.models).ok_or(())?;
 
     print_cyan(&format!("模型: {}", model));
     print_cyan(&format!("地址: {}", cfg.base_url));
@@ -538,64 +529,31 @@ fn find_claude_binary() -> String {
     "claude".to_string()
 }
 
-/// ── main ───────────────────────────────────────────────────────────
+// ── main ───────────────────────────────────────────────────────────
+
+fn exit_on_err(result: Result<(), ()>) {
+    if result.is_err() {
+        process::exit(1);
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if args.is_empty() {
-        if let Err(()) = do_select_and_run(&[]) {
-            process::exit(1);
-        }
+        exit_on_err(do_select_and_run(&[]));
         return;
     }
 
     match args[0].as_str() {
-        "version" => {
-            do_version();
-        }
-        "update" => {
-            if let Err(()) = do_update() {
-                process::exit(1);
-            }
-        }
-        "run" => {
-            if let Err(()) = do_select_and_run(&args[1..]) {
-                process::exit(1);
-            }
-        }
-        "config" => {
-            if let Err(()) = do_config(&args[1..]) {
-                process::exit(1);
-            }
-        }
-        "reset" => {
-            if let Err(()) = do_reset() {
-                process::exit(1);
-            }
-        }
-        "add-model" => {
-            let model = args.get(1).map(|s| s.as_str()).unwrap_or("");
-            if let Err(()) = do_add_model(model) {
-                process::exit(1);
-            }
-        }
-        "change-token" => {
-            let token = args.get(1).map(|s| s.as_str()).unwrap_or("");
-            if let Err(()) = do_change_token(token) {
-                process::exit(1);
-            }
-        }
-        "test" => {
-            if let Err(()) = do_test(&args[1..]) {
-                process::exit(1);
-            }
-        }
-        _ => {
-            // Unknown subcommand, treat as claude args
-            if let Err(()) = do_select_and_run(&args) {
-                process::exit(1);
-            }
-        }
+        "version" => do_version(),
+        "update" => exit_on_err(do_update()),
+        "run" => exit_on_err(do_select_and_run(&args[1..])),
+        "config" => exit_on_err(do_config(&args[1..])),
+        "reset" => exit_on_err(do_reset()),
+        "add-model" => exit_on_err(do_add_model(args.get(1).map(|s| s.as_str()).unwrap_or(""))),
+        "change-token" => exit_on_err(do_change_token(args.get(1).map(|s| s.as_str()).unwrap_or(""))),
+        "test" => exit_on_err(do_test(&args[1..])),
+        _ => exit_on_err(do_select_and_run(&args)),
     }
 }
