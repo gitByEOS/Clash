@@ -1,0 +1,25 @@
+[package]
+name = "clash"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "clash"
+path = "src/main.rs"
+
+[dependencies]
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+crossterm = "0.28"
+unicode-width = "0.2.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+strip = true
