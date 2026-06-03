@@ -403,7 +403,7 @@ def capture_frame(
 
     set_winsize(master)
     raw = bytearray()
-    raw.extend(drain(master, 3.0, until=b"cursor>", min_bytes=400))
+    raw.extend(drain(master, 3.0, until=b"clash>", min_bytes=400))
 
     for key in keys:
         os.write(master, key)
@@ -476,7 +476,7 @@ def assert_tui_down(screen: TerminalScreen) -> None:
 
 
 def assert_single_prompt(lines: list[str]) -> None:
-    prompts = [line for line in lines if line.startswith("cursor>")]
+    prompts = [line for line in lines if line.startswith("clash>")]
     if len(prompts) != 1:
         raise AssertionError(f"expected one prompt, got {len(prompts)}: {lines}")
 
@@ -551,9 +551,9 @@ def load_font(image_font):
 
 
 def draw_colored_line(draw, font, line: str, y: int) -> None:
-    if line.startswith("cursor>"):
-        draw.text((10, y), "cursor>", fill=(86, 156, 214), font=font)
-        draw.text((92, y), line[len("cursor>") :], fill=(212, 212, 212), font=font)
+    if line.startswith("clash>"):
+        draw.text((10, y), "clash>", fill=(86, 156, 214), font=font)
+        draw.text((82, y), line[len("clash>") :], fill=(212, 212, 212), font=font)
         return
     if line.startswith("→"):
         draw.text((10, y), "→", fill=(255, 0, 128), font=font)

@@ -124,7 +124,7 @@ const MARKER_END_COL: u16 = 2;
 /// fzf-style model selector.
 ///
 /// Layout (alternate screen):
-/// cursor> sonnet
+/// clash> sonnet
 /// 1/3 ─────────────────────────
 /// 选择模型 | ↑/↓ 选择, Enter 确认, Esc 退出
 /// → model  claude-sonnet-4-20250514
@@ -422,7 +422,7 @@ fn begin_line(out: &mut impl Write) {
 
 fn render_input(out: &mut impl Write, state: &State, theme: &Theme) {
     begin_line(out);
-    let prompt = "cursor>";
+    let prompt = "clash>";
     let _ = execute!(out, SetForegroundColor(theme.prompt));
     let _ = write!(out, "{}", prompt);
     reset_style(out);
@@ -593,7 +593,7 @@ fn display_width(text: &str) -> usize {
 
 fn input_cursor_col(state: &State) -> usize {
     let query_prefix: String = state.query.chars().take(state.cursor_pos).collect();
-    display_width("cursor> ") + display_width(&query_prefix)
+    display_width("clash> ") + display_width(&query_prefix)
 }
 
 fn write_fit(out: &mut impl Write, text: &str, max_width: usize) -> usize {

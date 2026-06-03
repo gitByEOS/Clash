@@ -685,7 +685,7 @@ function Select-Model([string[]]$Models) {
 
                 Clear-Frame
 
-                Write-FrameLine ("cursor> {0}" -f $query) Cyan
+                Write-FrameLine ("clash> {0}" -f $query) Cyan
 
                 $current = if ($filtered.Count -eq 0) { 0 } else { $selected + 1 }
                 $countText = "{0}/{1}" -f $current, $filtered.Count
