@@ -13,17 +13,38 @@ use std::process;
 const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const DEFAULT_RAW_BASE_URL: &str = "https://raw.githubusercontent.com/gitByEOS/Clash/master";
 
+#[cfg(unix)]
 fn print_red(msg: &str) {
     println!("\x1b[1;31m{}\x1b[0m", msg);
 }
+#[cfg(unix)]
 fn print_green(msg: &str) {
     println!("\x1b[1;32m{}\x1b[0m", msg);
 }
+#[cfg(unix)]
 fn print_yellow(msg: &str) {
     println!("\x1b[1;33m{}\x1b[0m", msg);
 }
+#[cfg(unix)]
 fn print_cyan(msg: &str) {
     println!("\x1b[1;36m{}\x1b[0m", msg);
+}
+
+#[cfg(not(unix))]
+fn print_red(msg: &str) {
+    println!("{}", msg);
+}
+#[cfg(not(unix))]
+fn print_green(msg: &str) {
+    println!("{}", msg);
+}
+#[cfg(not(unix))]
+fn print_yellow(msg: &str) {
+    println!("{}", msg);
+}
+#[cfg(not(unix))]
+fn print_cyan(msg: &str) {
+    println!("{}", msg);
 }
 
 // ── version / update ────────────────────────────────────────────────
@@ -113,8 +134,12 @@ struct RunModelChoice {
     config: ClashConfig,
 }
 
-fn account_label(idx: usize) -> String {
-    format!("{}st", idx + 1)
+fn account_label(slot: &config::ConfigSlot) -> String {
+    if let Some(name) = &slot.config.name {
+        name.clone()
+    } else {
+        format!("{}st", slot.idx + 1)
+    }
 }
 
 /// 通用参数解析：遍历 args，遇 --xxx 取下一元素为值
@@ -166,12 +191,19 @@ fn parse_config_set_args(args: &[String]) -> Result<ConfigSetArgs, ()> {
     })
 }
 
-fn save_config(idx: usize, base_url: String, auth_token: String, models: Vec<String>) -> Result<(), ()> {
+fn save_config(
+    idx: usize,
+    base_url: String,
+    auth_token: String,
+    models: Vec<String>,
+    name: Option<String>,
+) -> Result<(), ()> {
     let cfg = ClashConfig {
         base_url,
         auth_token_encrypted: crypto::encrypt_token(&auth_token).map_err(|_| ())?,
         command: "clash".to_string(),
         models,
+        name,
     };
 
     config::write_config_for_idx(idx, &cfg).map_err(|_| ())?;
@@ -207,7 +239,7 @@ fn do_configure_interactive_for_idx(idx: usize) -> Result<(), ()> {
     let mut model_list = Vec::new();
     while model_list.is_empty() {
         buf.clear();
-        print!("模型列表 (如 deepseek-v4-pro, deepseek-v4-flash)\n> ");
+        print!("模型列表 (如 deepseek-v4-pro[1m], deepseek-v4-flash)\n> ");
         std::io::stdout().flush().unwrap();
         std::io::stdin().read_line(&mut buf).unwrap();
         model_list = config::normalize_models(buf.trim());
@@ -216,7 +248,7 @@ fn do_configure_interactive_for_idx(idx: usize) -> Result<(), ()> {
         }
     }
 
-    save_config(idx, base_url, auth_token, model_list)
+    save_config(idx, base_url, auth_token, model_list, None)
 }
 
 fn do_configure_interactive() -> Result<(), ()> {
@@ -231,6 +263,7 @@ fn load_config_for_update(idx: usize) -> Result<ClashConfig, ()> {
             auth_token_encrypted: String::new(),
             command: "clash".to_string(),
             models: vec![],
+            name: None,
         }),
         Err(_) => Err(()),
     }
@@ -320,6 +353,60 @@ fn do_reset() -> Result<(), ()> {
     Ok(())
 }
 
+// ── rename (macOS only) ──────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn do_rename() -> Result<(), ()> {
+    let slots = config::read_config_slots().map_err(|_| ())?;
+    if slots.is_empty() {
+        print_yellow("未找到任何配置账户");
+        return Err(());
+    }
+
+    // 构建账户列表用于 TUI 选择
+    let labels: Vec<String> = slots
+        .iter()
+        .map(|slot| {
+            let current_name = account_label(slot);
+            let models_count = slot.config.models.len();
+            format!("{}  ({} 个模型)", current_name, models_count)
+        })
+        .collect();
+
+    let selected_label = tui::select_item(&labels, "选择账户").ok_or(())?;
+
+    // 找到选中的 slot
+    let slot = slots
+        .iter()
+        .find(|slot| {
+            let current_name = account_label(slot);
+            let models_count = slot.config.models.len();
+            format!("{}  ({} 个模型)", current_name, models_count) == selected_label
+        })
+        .ok_or(())?;
+
+    let current_name = account_label(slot);
+    print_cyan(&format!("当前名称: {}", current_name));
+
+    let mut buf = String::new();
+    print!("输入新名称: ");
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_line(&mut buf).unwrap();
+    let new_name = buf.trim().to_string();
+    let name_opt = if new_name.is_empty() { None } else { Some(new_name) };
+
+    // 更新配置
+    let mut cfg = slot.config.clone();
+    cfg.name = name_opt;
+
+    config::write_config_for_idx(slot.idx, &cfg).map_err(|_| ())?;
+
+    let new_label = cfg.name.clone().unwrap_or_else(|| format!("{}st", slot.idx + 1));
+    print_green(&format!("账户已重命名为: {}", new_label));
+
+    Ok(())
+}
+
 // ── test ───────────────────────────────────────────────────────────
 
 fn should_skip_auto_test() -> bool {
@@ -391,13 +478,13 @@ fn auto_test_after_config(idx: usize) -> Result<(), ()> {
 
     print_cyan("正在进行 Anthropic 兼容 API 连通测试（curl POST /v1/messages）...");
     let opts = api_test::TestOptions {
-        idx,
+        idx: Some(idx),
         base_url: None,
         auth_key: None,
         model: None,
     };
 
-    let ctx = api_test::prepare(&opts).map_err(|err| {
+    let ctx = api_test::prepare_for_idx(idx, &opts).map_err(|err| {
         print_red(&err);
     })?;
     if run_model_probes(&ctx) {
@@ -412,17 +499,56 @@ fn do_test(args: &[String]) -> Result<(), ()> {
         print_red("用法: clash test [--idx <编号>] [--url <地址>] [--key <Key>] [--model <模型>]");
     })?;
 
-    print_cyan("正在进行 Anthropic 兼容 API 连通测试（curl POST /v1/messages）...");
-    flush_stdout();
+    // 如果没有指定 idx，测试所有账户
+    let slots = config::read_config_slots().map_err(|_| ())?;
+    if slots.is_empty() {
+        print_yellow("未找到任何配置账户");
+        return Err(());
+    }
 
-    let ctx = api_test::prepare(&opts).map_err(|err| {
-        print_red(&err);
-    })?;
+    let test_indices: Vec<usize> = match opts.idx {
+        Some(idx) => {
+            // 检查指定的 idx 是否存在
+            if slots.iter().any(|s| s.idx == idx) {
+                vec![idx]
+            } else {
+                print_red(&format!("账户 idx={} 不存在", idx));
+                return Err(());
+            }
+        }
+        None => slots.iter().map(|s| s.idx).collect(),
+    };
 
-    if run_model_probes(&ctx) {
-        Ok(())
-    } else {
+    let mut total_failed = 0usize;
+    let mut total_passed = 0usize;
+
+    for &idx in &test_indices {
+        print_cyan(&format!(
+            "=== 测试账户 [{}] ===",
+            slots.iter().find(|s| s.idx == idx).map(account_label).unwrap_or_else(|| format!("{}st", idx + 1))
+        ));
+        flush_stdout();
+
+        let ctx = api_test::prepare_for_idx(idx, &opts).map_err(|err| {
+            print_red(&err);
+        })?;
+
+        let failed = !run_model_probes(&ctx);
+        if failed {
+            total_failed += ctx.models.len();
+        } else {
+            total_passed += ctx.models.len();
+        }
+    }
+
+    if test_indices.len() > 1 {
+        print_cyan(&format!("=== 总结: {} 通过, {} 失败 ===", total_passed, total_failed));
+    }
+
+    if total_failed > 0 {
         Err(())
+    } else {
+        Ok(())
     }
 }
 
@@ -436,7 +562,7 @@ fn collect_run_choices() -> Result<Vec<RunModelChoice>, ()> {
     for slot in slots {
         for model in &slot.config.models {
             let label = if is_multi_account {
-                format!("[{}]  {}", account_label(slot.idx), model)
+                format!("[{}]  {}", account_label(&slot), model)
             } else {
                 model.clone()
             };
@@ -576,6 +702,8 @@ fn main() {
         "config" => exit_on_err(do_config(&args[1..])),
         "reset" => exit_on_err(do_reset()),
         "test" => exit_on_err(do_test(&args[1..])),
+        #[cfg(target_os = "macos")]
+        "rename" => exit_on_err(do_rename()),
         _ => exit_on_err(do_select_and_run(&args)),
     }
 }

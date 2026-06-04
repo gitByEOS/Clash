@@ -1,5 +1,9 @@
 # ChangeLog
 
+## v0.1.3
+
+- `clash rename` 支持别名
+
 ## v0.1.2
 
 - 多渠道支持

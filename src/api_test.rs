@@ -9,7 +9,7 @@ const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.118 (external, cli)";
 
 /// `clash test` 可选参数
 pub struct TestOptions {
-    pub idx: usize,
+    pub idx: Option<usize>,  // None means test all accounts
     pub base_url: Option<String>,
     pub auth_key: Option<String>,
     pub model: Option<String>,
@@ -23,12 +23,14 @@ pub struct ModelProbeResult {
 }
 
 pub fn parse_test_args(args: &[String]) -> Result<TestOptions, ()> {
-    let map = parse_auth_args(args, &["--idx", "--url", "--key", "--model"], false)?;
+    let map = parse_auth_args(args, &["--idx", "--url", "--key", "--model", "--all"], false)?;
+    let has_all = map.contains_key("--all");
     let idx = map
         .get("--idx")
         .map(|value| value.parse::<usize>().map_err(|_| ()))
-        .transpose()?
-        .unwrap_or(0);
+        .transpose()?;
+    // --all 强制测试全部，否则如果没有指定 --idx 也测试全部
+    let idx = if has_all { None } else { idx };
     Ok(TestOptions {
         idx,
         base_url: map.get("--url").cloned(),
@@ -91,8 +93,8 @@ pub struct TestContext {
     pub models: Vec<String>,
 }
 
-pub fn prepare(opts: &TestOptions) -> Result<TestContext, String> {
-    let cfg = config::read_config_raw_for_idx(opts.idx).map_err(|e| e.to_string())?;
+pub fn prepare_for_idx(idx: usize, opts: &TestOptions) -> Result<TestContext, String> {
+    let cfg = config::read_config_raw_for_idx(idx).map_err(|e| e.to_string())?;
 
     let base_url = opts
         .base_url
@@ -229,9 +231,10 @@ mod tests {
             auth_token_encrypted: String::new(),
             command: "clash".to_string(),
             models: vec!["a".into(), "b".into()],
+            name: None,
         };
         let opts = TestOptions {
-            idx: 0,
+            idx: Some(0),
             base_url: None,
             auth_key: None,
             model: None,

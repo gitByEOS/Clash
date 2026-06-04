@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $AppName = "clash"
-$AppVersion = "v0.1.2"
+$AppVersion = "v0.1.3"
 $DefaultRawBaseUrl = "https://raw.githubusercontent.com/gitByEOS/Clash/master"
 
 function Get-RawBaseUrl {
@@ -94,7 +94,20 @@ function Get-ConfigPath([int]$Idx = 0) {
     return Join-Path $ConfigDir $fileName
 }
 
+function Get-AccountName([int]$Idx) {
+    $path = Get-ConfigPath $Idx
+    $name = Get-ConfigValue "NAME" $path
+    if ($name) {
+        return $name
+    }
+    return $null
+}
+
 function Get-AccountLabel([int]$Idx) {
+    $name = Get-AccountName $Idx
+    if ($name) {
+        return $name
+    }
     return "$($Idx + 1)st"
 }
 
@@ -199,7 +212,7 @@ function Get-AuthToken([string]$Path = $ConfigFile) {
     }
 }
 
-function Save-Config([string]$BaseUrl, [string]$Token, [string[]]$Models, [string]$CommandName = "clash", [int]$Idx = 0) {
+function Save-Config([string]$BaseUrl, [string]$Token, [string[]]$Models, [string]$CommandName = "clash", [int]$Idx = 0, [string]$Name = "") {
     New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
     $path = Get-ConfigPath $Idx
 
@@ -209,6 +222,11 @@ function Save-Config([string]$BaseUrl, [string]$Token, [string[]]$Models, [strin
         "# 生成时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
         "BASE_URL=$BaseUrl"
         "AUTH_TOKEN=$encrypted"
+    )
+    if ($Name) {
+        $content += "NAME=$Name"
+    }
+    $content += @(
         "COMMAND=$CommandName"
         "MODELS=<<MODELS"
     ) + $Models + @("MODELS")
@@ -345,7 +363,7 @@ function Invoke-ConfigInteractive([int]$Idx = 0) {
 
     $models = @()
     while ($models.Count -eq 0) {
-        $modelInput = Read-Host "模型列表 (如 deepseek-v4-pro, deepseek-v4-flash)"
+        $modelInput = Read-Host "模型列表 (如 deepseek-v4-pro[1m], deepseek-v4-flash)"
         $models = Normalize-Models $modelInput
         if ($models.Count -eq 0) {
             Write-Err "模型列表不能为空"
@@ -373,9 +391,10 @@ function Invoke-ConfigSet([string[]]$InputArgs) {
     $baseUrl = Get-ConfigValue "BASE_URL" $path
     $token = Get-AuthToken $path
     $models = @(Get-Models $path)
-    $name = Get-ConfigValue "COMMAND" $path
-    if (-not $name) {
-        $name = "clash"
+    $name = Get-ConfigValue "NAME" $path
+    $command = Get-ConfigValue "COMMAND" $path
+    if (-not $command) {
+        $command = "clash"
     }
 
     if ($parsed.Url) {
@@ -394,7 +413,7 @@ function Invoke-ConfigSet([string[]]$InputArgs) {
         }
     }
 
-    Save-Config $baseUrl $token $models $name $parsed.Idx
+    Save-Config $baseUrl $token $models $command $parsed.Idx $name
     Write-Ok "配置已保存到 $path"
 }
 
@@ -448,7 +467,7 @@ function Show-Config([int]$Idx = 0) {
 
 function Parse-TestArgs([string[]]$InputArgs) {
     $result = @{
-        Idx = 0
+        Idx = $null  # null means test all
         Url = ""
         Key = ""
         Model = ""
@@ -461,6 +480,9 @@ function Parse-TestArgs([string[]]$InputArgs) {
                 if ($i -ge $InputArgs.Count) { throw "--idx 缺少值" }
                 if ($InputArgs[$i] -notmatch '^\d+$') { throw "--idx 必须是 0 或正整数" }
                 $result.Idx = [int]$InputArgs[$i]
+            }
+            "--all" {
+                $result.Idx = $null
             }
             "--url" {
                 $i++
@@ -488,25 +510,61 @@ function Parse-TestArgs([string[]]$InputArgs) {
 
 function Invoke-Test([string[]]$InputArgs) {
     $parsed = Parse-TestArgs $InputArgs
-    $path = Get-ConfigPath $parsed.Idx
-
-    $baseUrl = if ($parsed.Url) { $parsed.Url } else { Get-ConfigValue "BASE_URL" $path }
-    if (-not $baseUrl) {
-        throw "缺少 BASE_URL，请先 clash config --url ..."
+    $slots = @(Get-ConfigSlots)
+    if ($slots.Count -eq 0) {
+        Write-Warn "未找到任何配置账户"
+        throw "未配置"
     }
 
-    $token = if ($parsed.Key) { $parsed.Key } else { Get-AuthToken $path }
-    if (-not $token) {
-        throw "缺少 API Key，请先 clash config --key ..."
+    $testIndices = if ($null -ne $parsed.Idx) {
+        if (-not ($slots | Where-Object { $_.Idx -eq $parsed.Idx })) {
+            throw "账户 idx=$($parsed.Idx) 不存在"
+        }
+        @($parsed.Idx)
+    }
+    else {
+        @($slots | ForEach-Object { $_.Idx })
     }
 
-    $models = if ($parsed.Model) { @($parsed.Model) } else { @(Get-Models $path) }
-    if ($models.Count -eq 0) {
-        throw "缺少模型，请配置 MODELS 或使用 --model"
+    $totalFailed = 0
+    $totalPassed = 0
+
+    foreach ($idx in $testIndices) {
+        $slot = $slots | Where-Object { $_.Idx -eq $idx } | Select-Object -First 1
+        $label = Get-AccountLabel $idx
+        Write-Info "=== 测试账户 [$label] ==="
+
+        $baseUrl = if ($parsed.Url) { $parsed.Url } else { $slot.BaseUrl }
+        if (-not $baseUrl) {
+            throw "缺少 BASE_URL，请先 clash config --url ..."
+        }
+
+        $token = if ($parsed.Key) { $parsed.Key } else { $slot.Token }
+        if (-not $token) {
+            throw "缺少 API Key，请先 clash config --key ..."
+        }
+
+        $models = if ($parsed.Model) { @($parsed.Model) } else { @($slot.Models) }
+        if ($models.Count -eq 0) {
+            throw "缺少模型，请配置 MODELS 或使用 --model"
+        }
+
+        try {
+            Invoke-ModelProbes $baseUrl $token $models
+            $totalPassed += $models.Count
+        }
+        catch {
+            $totalFailed += $models.Count
+        }
     }
 
-    Write-Info "正在进行 Anthropic 兼容 API 连通测试..."
-    Invoke-ModelProbes $baseUrl $token $models
+    if ($testIndices.Count -gt 1) {
+        Write-Info "=== 总结: $totalPassed 通过, $totalFailed 失败 ==="
+    }
+
+    if ($totalFailed -gt 0) {
+        throw "测试失败"
+    }
 }
 
 function Add-Model([string]$Model) {
@@ -581,6 +639,10 @@ function Enable-VirtualTerminal {
 }
 
 function Select-Model([string[]]$Models) {
+    Select-Item $Models "选择模型"
+}
+
+function Select-Item([string[]]$Items, [string]$Title) {
     if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
         $esc = [char]0x1b
         $query = ""
@@ -588,7 +650,7 @@ function Select-Model([string[]]$Models) {
         $offset = 0
         $markerCols = 2
         $rowPrefix = "model  "
-        $helpText = "选择模型 | ↑/↓ 选择, Enter 确认, Esc 退出"
+        $helpText = "$Title | ↑/↓ 选择, Enter 确认, Esc 退出"
 
         function Write-Tui([string]$Text) {
             [Console]::Out.Write($Text)
@@ -660,22 +722,22 @@ function Select-Model([string[]]$Models) {
             return 50000 - ($gaps * 100) - $last - $Haystack.Length
         }
 
-        function Get-FilteredModels([string[]]$SourceModels, [string]$Needle) {
+        function Get-FilteredItems([string[]]$SourceItems, [string]$Needle) {
             if (-not $Needle) {
-                return @($SourceModels)
+                return @($SourceItems)
             }
 
-            $ranked = foreach ($model in $SourceModels) {
-                $score = Get-FuzzyScore $Needle $model
+            $ranked = foreach ($item in $SourceItems) {
+                $score = Get-FuzzyScore $Needle $item
                 if ($null -ne $score) {
                     [pscustomobject]@{
                         Score = $score
-                        Model = $model
+                        Item = $item
                     }
                 }
             }
 
-            return @($ranked | Sort-Object -Property Score, Model -Descending | ForEach-Object { $_.Model })
+            return @($ranked | Sort-Object -Property Score, Item -Descending | ForEach-Object { $_.Item })
         }
 
         function Get-MatchMask([string]$Haystack, [string]$Needle) {
@@ -717,10 +779,10 @@ function Select-Model([string[]]$Models) {
             Write-TuiLine $Text $style
         }
 
-        function Write-SelectorRow([string]$ModelName, [string]$Needle, [bool]$IsSelected) {
+        function Write-SelectorRow([string]$ItemName, [string]$Needle, [bool]$IsSelected) {
             $width = Get-FrameWidth
-            $modelWidth = [Math]::Max(0, $width - $markerCols - $rowPrefix.Length)
-            $mask = Get-MatchMask $ModelName $Needle
+            $itemWidth = [Math]::Max(0, $width - $markerCols - $rowPrefix.Length)
+            $mask = Get-MatchMask $ItemName $Needle
             $rowStyle = if ($IsSelected) { "${esc}[48;5;53m${esc}[37m" } else { "${esc}[37m" }
 
             Write-Tui "`r${esc}[K$rowStyle"
@@ -734,12 +796,12 @@ function Select-Model([string[]]$Models) {
             Write-Tui $rowPrefix
 
             $written = 0
-            for ($i = 0; $i -lt $ModelName.Length; $i++) {
-                if ($written -ge $modelWidth) {
+            for ($i = 0; $i -lt $ItemName.Length; $i++) {
+                if ($written -ge $itemWidth) {
                     break
                 }
 
-                $ch = $ModelName[$i]
+                $ch = $ItemName[$i]
                 if ($mask[$i]) {
                     if ($IsSelected) {
                         Write-Tui "${esc}[48;5;53m${esc}[33m"
@@ -759,7 +821,7 @@ function Select-Model([string[]]$Models) {
                 $written++
             }
 
-            $padding = $modelWidth - $written
+            $padding = $itemWidth - $written
             if ($padding -gt 0) {
                 Write-Tui (" " * $padding)
             }
@@ -775,7 +837,7 @@ function Select-Model([string[]]$Models) {
         $selection = $null
         try {
             while ($true) {
-                $filtered = @(Get-FilteredModels $Models $query)
+                $filtered = @(Get-FilteredItems $Items $query)
                 $listHeight = [Math]::Max(1, [Math]::Min(10, [Console]::WindowHeight - 3))
 
                 if ($filtered.Count -eq 0) {
@@ -894,7 +956,7 @@ function Select-Model([string[]]$Models) {
         return $null
     }
 
-    return $Models[0]
+    return $Items[0]
 }
 
 function Get-ConfigSlots {
@@ -940,6 +1002,52 @@ function Get-RunChoices {
     }
 
     return @($choices)
+}
+
+function Invoke-Rename {
+    $slots = @(Get-ConfigSlots)
+    if ($slots.Count -eq 0) {
+        Write-Warn "未找到任何配置账户"
+        throw "未配置"
+    }
+
+    $labels = foreach ($slot in $slots) {
+        $currentName = Get-AccountLabel $slot.Idx
+        $modelsCount = $slot.Models.Count
+        "{0}  ({1} 个模型)" -f $currentName, $modelsCount
+    }
+
+    $selectedLabel = Select-Item @($labels) "选择账户"
+    if (-not $selectedLabel) {
+        return
+    }
+
+    $slot = $slots | Where-Object {
+        $currentName = Get-AccountLabel $_.Idx
+        $modelsCount = $_.Models.Count
+        "{0}  ({1} 个模型)" -f $currentName, $modelsCount -eq $selectedLabel
+    } | Select-Object -First 1
+
+    if (-not $slot) {
+        throw "无法找到选中账户"
+    }
+
+    $currentName = Get-AccountLabel $slot.Idx
+    Write-Info "当前名称: $currentName"
+
+    $newName = Read-Host "输入新名称:"
+    $nameToSave = if ($newName) { $newName } else { "" }
+
+    $baseUrl = $slot.BaseUrl
+    $token = $slot.Token
+    $models = @($slot.Models)
+    $command = Get-ConfigValue "COMMAND" (Get-ConfigPath $slot.Idx)
+    if (-not $command) { $command = "clash" }
+
+    Save-Config $baseUrl $token $models $command $slot.Idx $nameToSave
+
+    $newLabel = if ($nameToSave) { $nameToSave } else { "$($slot.Idx + 1)st" }
+    Write-Ok "账户已重命名为: $newLabel"
 }
 
 function Invoke-Claude([string[]]$ClaudeArgs) {
@@ -993,6 +1101,7 @@ try {
         "config" { Invoke-Config $rest }
         "reset" { Remove-Config }
         "test" { Invoke-Test $rest }
+        "rename" { Invoke-Rename }
         default { Invoke-Claude $CliArgs }
     }
 }

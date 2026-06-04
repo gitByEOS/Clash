@@ -59,6 +59,15 @@ def main() -> int:
     shared.assert_tui_multi_account(multi_screen)
     results.append("- 多账户 run 可从聚合列表启动")
 
+    log("rename via config")
+    shared.test_rename_via_config(env, 0, "work")
+    results.append("- config 设置 NAME=work 后配置文件含 NAME 字段")
+
+    log("renamed account label")
+    _, renamed_screen = capture_pwsh_frame(env, ["clash"], b"qwen-max")
+    shared.assert_tui_renamed(renamed_screen)
+    results.append("- 重命名后 TUI 显示 [work] 而非 [1st]")
+
     log("test command")
     shared.test_connection(env)
     results.append("- test 与 test --idx 1 连通测试成功")

@@ -129,14 +129,18 @@ const MARKER_END_COL: u16 = 2;
 // → model  claude-sonnet-4-20250514
 
 pub fn select_model(models: &[String]) -> Option<String> {
-    if models.is_empty() {
+    select_item(models, "选择模型")
+}
+
+pub fn select_item(items: &[String], title: &str) -> Option<String> {
+    if items.is_empty() {
         return None;
     }
     if !io::stdin().is_tty() {
-        return Some(models[0].clone());
+        return Some(items[0].clone());
     }
 
-    let result = run_tui(models);
+    let result = run_tui(items, title);
 
     // Always restore terminal on any exit path
     let _ = execute!(
@@ -151,7 +155,7 @@ pub fn select_model(models: &[String]) -> Option<String> {
 }
 
 struct State {
-    all_models: Vec<String>,
+    all_items: Vec<String>,
     query: String,
     cursor_pos: usize,
     selected: usize,
@@ -162,21 +166,23 @@ struct State {
     /// 上一帧渲染的总行数
     total_lines: usize,
     theme: Theme,
+    title: String,
 }
 
 impl State {
-    fn new(models: &[String]) -> Self {
+    fn new(items: &[String], title: &str) -> Self {
         let mut s = Self {
-            all_models: models.to_vec(),
+            all_items: items.to_vec(),
             query: String::new(),
             cursor_pos: 0,
             selected: 0,
             offset: 0,
-            filtered: models.to_vec(),
+            filtered: items.to_vec(),
             height: 0,
             width: 80,
             total_lines: 0,
             theme: Theme::detect(),
+            title: title.to_string(),
         };
         s.update_filtered();
         s
@@ -184,10 +190,10 @@ impl State {
 
     fn update_filtered(&mut self) {
         if self.query.is_empty() {
-            self.filtered = self.all_models.clone();
+            self.filtered = self.all_items.clone();
         } else {
             let mut scored: Vec<(i64, String)> = self
-                .all_models
+                .all_items
                 .iter()
                 .filter_map(|m| fuzzy::fuzzy_score(&self.query, m).map(|s| (s, m.clone())))
                 .collect();
@@ -209,14 +215,14 @@ impl State {
     }
 }
 
-fn run_tui(models: &[String]) -> Option<String> {
+fn run_tui(items: &[String], title: &str) -> Option<String> {
     if terminal::enable_raw_mode().is_err() {
-        return Some(models[0].clone());
+        return Some(items[0].clone());
     }
     let mut out = stdout();
 
     // 预留足够垂直空间，避免底部截断
-    let needed_lines = 13; // prompt + info + help + 最多10行模型
+    let needed_lines = 13; // prompt + info + help + 最多10行
     for _ in 0..needed_lines {
         writeln!(out).ok();
     }
@@ -230,7 +236,7 @@ fn run_tui(models: &[String]) -> Option<String> {
         Show
     );
 
-    let mut state = State::new(models);
+    let mut state = State::new(items, title);
     state.recalculate_size();
     render(&mut out, &mut state);
 
@@ -242,10 +248,10 @@ fn run_tui(models: &[String]) -> Option<String> {
                 })) = event::read()
                 {
                     match handle_key(code, modifiers, &mut state) {
-                        KeyAction::Select(model) => {
+                        KeyAction::Select(item) => {
                             cleanup_tui(&mut out, state.total_lines);
                             let _ = terminal::disable_raw_mode();
-                            return Some(model);
+                            return Some(item);
                         }
                         KeyAction::Quit => {
                             cleanup_tui(&mut out, state.total_lines);
@@ -262,7 +268,7 @@ fn run_tui(models: &[String]) -> Option<String> {
             Err(_) => {
                 cleanup_tui(&mut out, state.total_lines);
                 let _ = terminal::disable_raw_mode();
-                return Some(models[0].clone());
+                return Some(items[0].clone());
             }
         }
     }
@@ -395,7 +401,7 @@ fn render(out: &mut impl Write, state: &mut State) {
     let theme = &state.theme;
     render_input(out, state, theme);
     render_info(out, state, sel, frame_width, theme);
-    render_help(out, frame_width, theme);
+    render_help(out, frame_width, theme, &state.title);
 
     let mut line_count = 3usize;
 
@@ -464,11 +470,11 @@ fn render_info(
     finish_line(out);
 }
 
-fn render_help(out: &mut impl Write, width: usize, theme: &Theme) {
+fn render_help(out: &mut impl Write, width: usize, theme: &Theme, title: &str) {
     begin_line(out);
-    let help = "选择模型 | ↑/↓ 选择, Enter 确认, Esc 退出";
+    let help = format!("{} | ↑/↓ 选择, Enter 确认, Esc 退出", title);
     let _ = execute!(out, SetForegroundColor(theme.hint));
-    write_fit(out, help, width);
+    write_fit(out, &help, width);
     reset_style(out);
     finish_line(out);
 }

@@ -14,6 +14,7 @@ pub struct ClashConfig {
     pub auth_token_encrypted: String,
     pub command: String,
     pub models: Vec<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -90,6 +91,7 @@ fn parse_config_content(content: &str) -> ClashConfig {
     let mut auth_token_encrypted = String::new();
     let mut command = String::new();
     let mut models = Vec::new();
+    let mut name: Option<String> = None;
     let mut in_models = false;
 
     for line in content.lines() {
@@ -113,6 +115,7 @@ fn parse_config_content(content: &str) -> ClashConfig {
                 "BASE_URL" => base_url = value.to_string(),
                 "AUTH_TOKEN" => auth_token_encrypted = value.to_string(),
                 "COMMAND" => command = value.to_string(),
+                "NAME" => name = Some(value.to_string()).filter(|s| !s.is_empty()),
                 "MODELS" if value == "<<MODELS" => {
                     in_models = true;
                 }
@@ -130,6 +133,7 @@ fn parse_config_content(content: &str) -> ClashConfig {
         auth_token_encrypted,
         command,
         models,
+        name,
     }
 }
 
@@ -148,6 +152,9 @@ pub fn write_config_for_idx(idx: usize, cfg: &ClashConfig) -> Result<(), ConfigE
     content.push_str(&format!("# 生成时间: {}\n", now));
     content.push_str(&format!("BASE_URL={}\n", cfg.base_url));
     content.push_str(&format!("AUTH_TOKEN={}\n", cfg.auth_token_encrypted));
+    if let Some(name) = &cfg.name {
+        content.push_str(&format!("NAME={}\n", name));
+    }
     content.push_str(&format!("COMMAND={}\n", cfg.command));
     content.push_str("MODELS=<<MODELS\n");
     for model in &cfg.models {

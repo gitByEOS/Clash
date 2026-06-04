@@ -236,14 +236,23 @@ def main() -> int:
     assert_tui_multi_account(initial_screen)
     results.append(f"- 多账户 run 使用 1st / 2st 标签，共 {len(MODELS) + len(ALT_MODELS)} 个模型")
 
+    log("test rename via config")
+    test_rename_via_config(env, 0, "work")
+    results.append("- config 设置 NAME=work 后配置文件含 NAME 字段")
+
+    log("test renamed account label")
+    renamed_raw, renamed_screen = capture_frame(env, ["clash"])
+    assert_tui_renamed(renamed_screen)
+    results.append("- 重命名后 TUI 显示 [work] 而非 [1st]")
+
     log("test tui run subcommand")
     run_raw, run_screen = capture_frame(env, ["clash", "run"])
-    assert_tui_multi_account(run_screen)
+    assert_tui_renamed(run_screen)
     results.append("- clash run 与 clash 等价")
 
     log("test tui down arrow")
     down_raw, down_screen = capture_frame(env, ["clash"], keys=[b"\x1b[B"])
-    assert_tui_down(down_screen)
+    assert_tui_down_renamed(down_screen)
     results.append("- 下箭头后选中第二项且不重复刷屏")
 
     write_artifacts(
@@ -252,12 +261,14 @@ def main() -> int:
         single_screen,
         initial_raw,
         initial_screen,
+        renamed_raw,
+        renamed_screen,
         down_raw,
         down_screen,
         run_raw,
         run_screen,
     )
-    write_report(artifact_dir, results, single_screen, initial_screen, down_screen, run_screen)
+    write_report(artifact_dir, results, single_screen, initial_screen, renamed_screen, down_screen, run_screen)
 
     print(f"E2E passed: {artifact_dir}")
     return 0
@@ -551,12 +562,32 @@ def test_config_interactive_missing_idx(
     result = run_clash_with_input(
         ["config", "--idx", str(idx)],
         env,
-        f"{base_url}\n{api_key}\n{','.join(models)}\n",
+        f"{base_url}\n{api_key}\n\n{','.join(models)}\n",  # 第三项空字符串跳过账户别名
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "Clash 配置向导" in result.stdout
     assert config_path(config_home(env), idx).is_file()
     test_config_show(env, idx, base_url, models)
+
+
+def test_rename_via_config(env: dict[str, str], idx: int, new_name: str) -> None:
+    # 直接修改配置文件添加 NAME 字段
+    config_file = config_path(config_home(env), idx)
+    content = config_file.read_text(encoding="utf-8")
+
+    # 在 AUTH_TOKEN 后添加 NAME 行
+    lines = content.splitlines()
+    new_lines = []
+    for line in lines:
+        new_lines.append(line)
+        if line.startswith("AUTH_TOKEN="):
+            new_lines.append(f"NAME={new_name}")
+
+    config_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+    # 验证配置文件包含 NAME 字段
+    content = config_file.read_text(encoding="utf-8")
+    assert f"NAME={new_name}" in content, content
 
 
 def capture_frame(
@@ -662,6 +693,30 @@ def assert_tui_down(screen: TerminalScreen) -> None:
     assert_not_contains(lines, "^[[B")
 
 
+def assert_tui_renamed(screen: TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    assert_single_prompt(lines)
+    assert_contains(lines, "1/6")
+    assert_contains(lines, "→ model  [work]  qwen3.6-plus")
+    assert_contains(lines, "  model  [work]  glm-5")
+    assert_contains(lines, "  model  [work]  kimi-k2")
+    assert_contains(lines, "  model  [2st]  deepseek-v4-pro")
+    assert_not_contains(lines, "[1st]")
+    assert_not_contains(lines, "^[[B")
+
+
+def assert_tui_down_renamed(screen: TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    assert_single_prompt(lines)
+    assert_contains(lines, "2/6")
+    assert_contains(lines, "  model  [work]  qwen3.6-plus")
+    assert_contains(lines, "→ model  [work]  glm-5")
+    assert_contains(lines, "  model  [work]  kimi-k2")
+    assert_contains(lines, "  model  [2st]  deepseek-v4-pro")
+    assert_not_contains(lines, "[1st]")
+    assert_not_contains(lines, "^[[B")
+
+
 def assert_single_prompt(lines: list[str]) -> None:
     prompts = [line for line in lines if line.startswith("clash>")]
     if len(prompts) != 1:
@@ -684,6 +739,8 @@ def write_artifacts(
     single_screen: TerminalScreen,
     initial_raw: bytes,
     initial_screen: TerminalScreen,
+    renamed_raw: bytes,
+    renamed_screen: TerminalScreen,
     down_raw: bytes,
     down_screen: TerminalScreen,
     run_raw: bytes,
@@ -691,14 +748,17 @@ def write_artifacts(
 ) -> None:
     (artifact_dir / "single-account.raw").write_bytes(single_raw)
     (artifact_dir / "initial.raw").write_bytes(initial_raw)
+    (artifact_dir / "renamed.raw").write_bytes(renamed_raw)
     (artifact_dir / "after-down.raw").write_bytes(down_raw)
     (artifact_dir / "run.raw").write_bytes(run_raw)
     (artifact_dir / "single-account.txt").write_text(render_text(single_screen), encoding="utf-8")
     (artifact_dir / "initial.txt").write_text(render_text(initial_screen), encoding="utf-8")
+    (artifact_dir / "renamed.txt").write_text(render_text(renamed_screen), encoding="utf-8")
     (artifact_dir / "after-down.txt").write_text(render_text(down_screen), encoding="utf-8")
     (artifact_dir / "run.txt").write_text(render_text(run_screen), encoding="utf-8")
     write_png(artifact_dir / "single-account.png", single_screen)
     write_png(artifact_dir / "initial.png", initial_screen)
+    write_png(artifact_dir / "renamed.png", renamed_screen)
     write_png(artifact_dir / "after-down.png", down_screen)
     write_png(artifact_dir / "run.png", run_screen)
 
@@ -767,6 +827,7 @@ def write_report(
     results: list[str],
     single: TerminalScreen,
     initial: TerminalScreen,
+    renamed: TerminalScreen,
     down: TerminalScreen,
     run_screen: TerminalScreen,
 ) -> None:
@@ -777,9 +838,9 @@ def write_report(
 {checklist}
 
 ## 产物
-- `single-account.txt` / `initial.txt` / `after-down.txt` / `run.txt`
-- `single-account.png` / `initial.png` / `after-down.png` / `run.png`
-- `single-account.raw` / `initial.raw` / `after-down.raw` / `run.raw`
+- `single-account.txt` / `initial.txt` / `renamed.txt` / `after-down.txt` / `run.txt`
+- `single-account.png` / `initial.png` / `renamed.png` / `after-down.png` / `run.png`
+- `single-account.raw` / `initial.raw` / `renamed.raw` / `after-down.raw` / `run.raw`
 - `config-home/` 保留本次测试配置目录
 - `reset-before.txt` / `reset-after.txt` 记录 reset 前后账户文件
 
@@ -790,6 +851,10 @@ def write_report(
 ## 多账户首帧
 ```text
 {render_text(initial)}```
+
+## 重命名后首帧
+```text
+{render_text(renamed)}```
 
 ## clash run 首帧
 ```text
