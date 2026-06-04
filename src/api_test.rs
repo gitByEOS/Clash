@@ -9,6 +9,7 @@ const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.118 (external, cli)";
 
 /// `clash test` 可选参数
 pub struct TestOptions {
+    pub idx: usize,
     pub base_url: Option<String>,
     pub auth_key: Option<String>,
     pub model: Option<String>,
@@ -22,8 +23,14 @@ pub struct ModelProbeResult {
 }
 
 pub fn parse_test_args(args: &[String]) -> Result<TestOptions, ()> {
-    let map = parse_auth_args(args, &["--url", "--key", "--model"], false)?;
+    let map = parse_auth_args(args, &["--idx", "--url", "--key", "--model"], false)?;
+    let idx = map
+        .get("--idx")
+        .map(|value| value.parse::<usize>().map_err(|_| ()))
+        .transpose()?
+        .unwrap_or(0);
     Ok(TestOptions {
+        idx,
         base_url: map.get("--url").cloned(),
         auth_key: map.get("--key").cloned(),
         model: map.get("--model").cloned(),
@@ -85,7 +92,7 @@ pub struct TestContext {
 }
 
 pub fn prepare(opts: &TestOptions) -> Result<TestContext, String> {
-    let cfg = config::read_config_raw().map_err(|e| e.to_string())?;
+    let cfg = config::read_config_raw_for_idx(opts.idx).map_err(|e| e.to_string())?;
 
     let base_url = opts
         .base_url
@@ -224,6 +231,7 @@ mod tests {
             models: vec!["a".into(), "b".into()],
         };
         let opts = TestOptions {
+            idx: 0,
             base_url: None,
             auth_key: None,
             model: None,

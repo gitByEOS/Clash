@@ -24,9 +24,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = ROOT / "e2e" / "artifacts"
 CLASH_BIN = ROOT / "target" / "debug" / "clash"
-MODELS = ["qwen3.6-plus", "glm-5"]
+CONFIG_HOME_ENV = "CLASH_TEST_CONFIG_HOME"
+MODELS = ["qwen3.6-plus", "glm-5", "kimi-k2"]
+ALT_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash", "qwen-max"]
 BASE_URL = "http://example.test/anthropic"
+ALT_BASE_URL = "http://alt.example.test/anthropic"
 API_KEY = "sk-test-token"
+ALT_API_KEY = "sk-alt-token"
 COLS = 80
 ROWS = 24
 
@@ -161,84 +165,108 @@ def main() -> int:
     stamp = datetime.now().strftime("%y%m%d-%H%M%S")
     artifact_dir = ARTIFACT_ROOT / stamp
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    config_home = artifact_dir / "config-home"
+    config_home.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
     env["CLASH_SKIP_AUTO_TEST"] = "1"
-    with tempfile.TemporaryDirectory(prefix="clash-e2e-") as config_home:
-        env["XDG_CONFIG_HOME"] = config_home
-        log("build")
-        build(env)
+    env[CONFIG_HOME_ENV] = str(config_home)
+    env["XDG_CONFIG_HOME"] = str(config_home)
+    log("build")
+    build(env)
 
-        results: list[str] = []
+    results: list[str] = []
 
-        log("test config set")
-        test_config_set(env)
-        results.append("- config set 写入成功")
+    log("test config idx0 set")
+    test_config_set(env, 0, BASE_URL, API_KEY, MODELS)
+    results.append("- config --idx 0 写入 auth")
 
-        log("test config show")
-        test_config_show(env)
-        results.append("- config show 展示 BASE_URL 与模型")
+    log("test config idx0 show")
+    test_config_show(env, 0, BASE_URL, MODELS)
+    results.append("- config --idx 0 展示 BASE_URL 与模型")
 
-        log("test config partial update")
-        test_config_partial_update(env)
-        results.append("- config 支持单独更新 --url / --key / --models")
+    log("test single account run before idx1")
+    single_raw, single_screen = capture_frame(env, ["clash"])
+    assert_tui_single_account(single_screen)
+    results.append(f"- 创建 idx1 前单账户首帧显示 {len(MODELS)} 个模型且无账户标签")
 
-        log("test config empty models")
-        test_config_empty_models(env)
-        results.append("- config --models 空列表失败")
+    log("test config idx1 set")
+    test_config_set(env, 1, ALT_BASE_URL, ALT_API_KEY, ALT_MODELS)
+    results.append("- config --idx 1 写入 auth1")
 
-        log("test reset")
-        test_reset(env)
-        results.append("- reset 删除配置")
+    log("test config idx1 show")
+    test_config_show(env, 1, ALT_BASE_URL, ALT_MODELS)
+    results.append("- config --idx 1 展示独立账户")
 
-        log("test config show after reset")
-        test_config_show_unconfigured(env)
-        results.append("- reset 后 config show 提示未配置")
+    log("test config partial update")
+    test_config_partial_update(env)
+    results.append("- config 支持单独更新 --url / --key / --models")
 
-        log("test config set again for tui")
-        test_config_set(env)
+    log("test config empty models")
+    test_config_empty_models(env)
+    results.append("- config --models 空列表失败")
 
-        log("test connection")
-        test_connection(env)
-        results.append("- clash test 对 /v1/messages 连通测试成功")
+    log("test invalid idx")
+    test_invalid_idx(env)
+    results.append("- 非法 --idx 会失败")
 
-        log("test tui default run")
-        initial_raw, initial_screen = capture_frame(env, ["clash"])
-        assert_tui_initial(initial_screen)
-        results.append("- clash 首帧选中第一项")
+    log("test reset")
+    test_reset(env, artifact_dir)
+    results.append("- reset 真实删除 config-home 下全部账户配置")
 
-        log("test tui run subcommand")
-        run_raw, run_screen = capture_frame(env, ["clash", "run"])
-        assert_tui_initial(run_screen)
-        results.append("- clash run 与 clash 等价")
+    log("test config interactive after reset")
+    test_config_interactive_missing_idx(env, 0, BASE_URL, API_KEY, MODELS)
+    test_config_interactive_missing_idx(env, 1, ALT_BASE_URL, ALT_API_KEY, ALT_MODELS)
+    results.append("- reset 后缺失 idx 进入引导并写入对应账户")
 
-        log("test tui down arrow")
-        down_raw, down_screen = capture_frame(env, ["clash"], keys=[b"\x1b[B"])
-        assert_tui_down(down_screen)
-        results.append("- 下箭头后选中第二项且不重复刷屏")
+    log("test connection")
+    test_connection(env)
+    results.append("- clash test 与 clash test --idx 1 连通测试成功")
 
-        write_artifacts(
-            artifact_dir,
-            initial_raw,
-            initial_screen,
-            down_raw,
-            down_screen,
-            run_raw,
-            run_screen,
-        )
-        write_report(artifact_dir, results, initial_screen, down_screen, run_screen)
+    log("test run exec env")
+    test_run_exec_env(env)
+    results.append("- clash run 按选中账户设置 Claude 环境变量")
+
+    log("test removed commands")
+    test_removed_commands(env)
+    results.append("- add-model / change-token 已不再作为命令入口")
+
+    log("test multi account run")
+    initial_raw, initial_screen = capture_frame(env, ["clash"])
+    assert_tui_multi_account(initial_screen)
+    results.append(f"- 多账户 run 使用 1st / 2st 标签，共 {len(MODELS) + len(ALT_MODELS)} 个模型")
+
+    log("test tui run subcommand")
+    run_raw, run_screen = capture_frame(env, ["clash", "run"])
+    assert_tui_multi_account(run_screen)
+    results.append("- clash run 与 clash 等价")
+
+    log("test tui down arrow")
+    down_raw, down_screen = capture_frame(env, ["clash"], keys=[b"\x1b[B"])
+    assert_tui_down(down_screen)
+    results.append("- 下箭头后选中第二项且不重复刷屏")
+
+    write_artifacts(
+        artifact_dir,
+        single_raw,
+        single_screen,
+        initial_raw,
+        initial_screen,
+        down_raw,
+        down_screen,
+        run_raw,
+        run_screen,
+    )
+    write_report(artifact_dir, results, single_screen, initial_screen, down_screen, run_screen)
 
     print(f"E2E passed: {artifact_dir}")
     return 0
 
 
 def build(env: dict[str, str]) -> None:
-    if CLASH_BIN.exists():
-        return
-
     cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
     if not Path(cargo).exists():
-        raise RuntimeError("未找到 cargo，且 target/debug/clash 不存在")
+        raise RuntimeError("未找到 cargo")
 
     run([cargo, "build"], env)
     if not CLASH_BIN.exists():
@@ -261,6 +289,19 @@ def run_clash(args: list[str], env: dict[str, str], *, check: bool = True) -> Cl
     return CliResult(proc.returncode, strip_ansi(proc.stdout), strip_ansi(proc.stderr))
 
 
+def run_clash_with_input(args: list[str], env: dict[str, str], stdin: str, *, check: bool = True) -> CliResult:
+    proc = subprocess.run(
+        [str(CLASH_BIN), *args],
+        cwd=ROOT,
+        env=env,
+        input=stdin,
+        check=check,
+        text=True,
+        capture_output=True,
+    )
+    return CliResult(proc.returncode, strip_ansi(proc.stdout), strip_ansi(proc.stderr))
+
+
 def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
 
@@ -269,34 +310,42 @@ def log(message: str) -> None:
     print(f"[e2e] {message}", flush=True)
 
 
-def config_path(config_home: str) -> Path:
-    return Path(config_home) / "clash" / "auth"
+def config_path(config_home: str, idx: int = 0) -> Path:
+    file_name = "auth" if idx == 0 else f"auth{idx}"
+    return Path(config_home) / "clash" / file_name
 
 
-def test_config_set(env: dict[str, str]) -> None:
+def config_home(env: dict[str, str]) -> str:
+    return env[CONFIG_HOME_ENV]
+
+
+def test_config_set(env: dict[str, str], idx: int, base_url: str, api_key: str, models: list[str]) -> None:
     result = run_clash(
         [
             "config",
+            "--idx",
+            str(idx),
             "--url",
-            BASE_URL,
+            base_url,
             "--key",
-            API_KEY,
+            api_key,
             "--models",
-            ",".join(MODELS),
+            ",".join(models),
         ],
         env,
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "配置已保存" in result.stdout
-    assert config_path(env["XDG_CONFIG_HOME"]).is_file()
+    assert config_path(config_home(env), idx).is_file()
 
 
-def test_config_show(env: dict[str, str]) -> None:
-    result = run_clash(["config"], env)
+def test_config_show(env: dict[str, str], idx: int, base_url: str, models: list[str]) -> None:
+    result = run_clash(["config", "--idx", str(idx)], env)
     assert result.returncode == 0, result.stderr or result.stdout
-    assert f"BASE_URL={BASE_URL}" in result.stdout
+    assert f"=== 当前配置 idx={idx} ===" in result.stdout
+    assert f"BASE_URL={base_url}" in result.stdout
     assert "MODELS=<<MODELS" in result.stdout
-    for model in MODELS:
+    for model in models:
         assert model in result.stdout
 
 
@@ -317,19 +366,53 @@ def test_config_partial_update(env: dict[str, str]) -> None:
     show = run_clash(["config"], env)
     assert "glm-5" in show.stdout
     assert "qwen3.6-plus" not in show.stdout
+    idx1 = run_clash(["config", "--idx", "1"], env)
+    assert f"BASE_URL={ALT_BASE_URL}" in idx1.stdout
+    assert ALT_MODELS[0] in idx1.stdout
 
 
 def test_config_empty_models(env: dict[str, str]) -> None:
-    result = run_clash(["config", "--models", " , "], env, check=False)
+    result = run_clash(["config", "--idx", "1", "--models", " , "], env, check=False)
     assert result.returncode != 0
     assert "模型列表不能为空" in result.stdout
 
 
-def test_reset(env: dict[str, str]) -> None:
+def test_invalid_idx(env: dict[str, str]) -> None:
+    result = run_clash(["config", "--idx", "abc"], env, check=False)
+    assert result.returncode != 0
+    assert "--idx 必须是 0 或正整数" in result.stdout
+
+    result = run_clash(["test", "--idx", "abc"], env, check=False)
+    assert result.returncode != 0
+    assert "用法: clash test" in result.stdout
+
+
+def auth_files(config_home: str) -> list[str]:
+    config_dir = Path(config_home) / "clash"
+    if not config_dir.exists():
+        return []
+    return sorted(path.name for path in config_dir.glob("auth*") if path.is_file())
+
+
+def write_auth_snapshot(path: Path, files: list[str]) -> None:
+    content = "\n".join(files) if files else "<empty>"
+    path.write_text(content + "\n", encoding="utf-8")
+
+
+def test_reset(env: dict[str, str], artifact_dir: Path) -> None:
+    before = auth_files(config_home(env))
+    assert before == ["auth", "auth1"], before
+    write_auth_snapshot(artifact_dir / "reset-before.txt", before)
+
     result = run_clash(["reset"], env)
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "已删除配置" in result.stdout
-    assert not config_path(env["XDG_CONFIG_HOME"]).exists()
+    assert "已删除全部配置" in result.stdout
+    assert not config_path(config_home(env), 0).exists()
+    assert not config_path(config_home(env), 1).exists()
+
+    after = auth_files(config_home(env))
+    assert after == [], after
+    write_auth_snapshot(artifact_dir / "reset-after.txt", after)
 
 
 class _AnthropicMockHandler(BaseHTTPRequestHandler):
@@ -367,10 +450,28 @@ def test_connection(env: dict[str, str]) -> None:
         run_clash(
             [
                 "config",
+                "--idx",
+                "0",
                 "--url",
                 mock_url,
                 "--key",
                 API_KEY,
+                "--models",
+                ",".join(MODELS),
+            ],
+            env,
+        )
+        run_clash(
+            [
+                "config",
+                "--idx",
+                "1",
+                "--url",
+                mock_url,
+                "--key",
+                ALT_API_KEY,
+                "--models",
+                ",".join(ALT_MODELS),
             ],
             env,
         )
@@ -379,15 +480,83 @@ def test_connection(env: dict[str, str]) -> None:
         assert "全部通过" in result.stdout
         assert "qwen3.6-plus 通过" in result.stdout
         assert "glm-5 通过" in result.stdout
+        assert "kimi-k2 通过" in result.stdout
+
+        result = run_clash(["test", "--idx", "1"], env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "deepseek-v4-pro 通过" in result.stdout
+        assert "deepseek-v4-flash 通过" in result.stdout
+        assert "qwen-max 通过" in result.stdout
+        assert "qwen3.6-plus 通过" not in result.stdout
     finally:
         server.shutdown()
         thread.join(timeout=2)
 
 
-def test_config_show_unconfigured(env: dict[str, str]) -> None:
-    result = run_clash(["config"], env, check=False)
-    assert result.returncode != 0
-    assert "未配置" in result.stdout
+def test_run_exec_env(
+    env: dict[str, str],
+    *,
+    expected_base: str = "http://127.0.0.1",
+    expected_model: str = "qwen3.6-plus",
+) -> CliResult:
+    with tempfile.TemporaryDirectory(prefix="clash-e2e-bin-") as bin_dir:
+        claude = Path(bin_dir) / "claude"
+        claude.write_text(
+            "#!/bin/sh\n"
+            "echo BASE=$ANTHROPIC_BASE_URL\n"
+            "echo TOKEN=$ANTHROPIC_AUTH_TOKEN\n"
+            "echo MODEL=$ANTHROPIC_MODEL\n"
+            "echo ARGS=$*\n",
+            encoding="utf-8",
+        )
+        claude.chmod(0o755)
+
+        run_env = env.copy()
+        run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
+        result = run_clash(["run", "--smoke"], run_env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"BASE={expected_base}" in result.stdout
+    assert f"MODEL={expected_model}" in result.stdout
+    assert f"ARGS=--permission-mode bypassPermissions --effort max --model {expected_model} --smoke" in result.stdout
+    assert "模型:" not in result.stdout
+    assert "地址:" not in result.stdout
+    return result
+
+
+def test_removed_commands(env: dict[str, str]) -> None:
+    with tempfile.TemporaryDirectory(prefix="clash-e2e-bin-") as bin_dir:
+        claude = Path(bin_dir) / "claude"
+        claude.write_text("#!/bin/sh\necho ARGS=$*\n", encoding="utf-8")
+        claude.chmod(0o755)
+
+        run_env = env.copy()
+        run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
+        add_model = run_clash(["add-model", "new-model"], run_env)
+        change_token = run_clash(["change-token", "sk-new"], run_env)
+
+    assert add_model.returncode == 0
+    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus add-model new-model" in add_model.stdout
+    assert change_token.returncode == 0
+    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus change-token sk-new" in change_token.stdout
+
+
+def test_config_interactive_missing_idx(
+    env: dict[str, str],
+    idx: int,
+    base_url: str,
+    api_key: str,
+    models: list[str],
+) -> None:
+    result = run_clash_with_input(
+        ["config", "--idx", str(idx)],
+        env,
+        f"{base_url}\n{api_key}\n{','.join(models)}\n",
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "Clash 配置向导" in result.stdout
+    assert config_path(config_home(env), idx).is_file()
+    test_config_show(env, idx, base_url, models)
 
 
 def capture_frame(
@@ -403,7 +572,7 @@ def capture_frame(
 
     set_winsize(master)
     raw = bytearray()
-    raw.extend(drain(master, 3.0, until=b"clash>", min_bytes=400))
+    raw.extend(drain(master, 3.0, until=b"qwen-max", min_bytes=700))
 
     for key in keys:
         os.write(master, key)
@@ -457,21 +626,39 @@ def stop_child(pid: int) -> None:
         pass
 
 
-def assert_tui_initial(screen: TerminalScreen) -> None:
+def assert_tui_single_account(screen: TerminalScreen) -> None:
     lines = screen.semantic_lines()
     assert_single_prompt(lines)
-    assert_contains(lines, "1/2")
+    assert_contains(lines, "1/3")
     assert_contains(lines, "→ model  qwen3.6-plus")
     assert_contains(lines, "  model  glm-5")
+    assert_contains(lines, "  model  kimi-k2")
+    assert_not_contains(lines, "[1st]")
+    assert_not_contains(lines, "[2st]")
+    assert_not_contains(lines, "^[[B")
+
+
+def assert_tui_multi_account(screen: TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    assert_single_prompt(lines)
+    assert_contains(lines, "1/6")
+    assert_contains(lines, "→ model  [1st]  qwen3.6-plus")
+    assert_contains(lines, "  model  [1st]  glm-5")
+    assert_contains(lines, "  model  [1st]  kimi-k2")
+    assert_contains(lines, "  model  [2st]  deepseek-v4-pro")
+    assert_contains(lines, "  model  [2st]  deepseek-v4-flash")
+    assert_contains(lines, "  model  [2st]  qwen-max")
     assert_not_contains(lines, "^[[B")
 
 
 def assert_tui_down(screen: TerminalScreen) -> None:
     lines = screen.semantic_lines()
     assert_single_prompt(lines)
-    assert_contains(lines, "2/2")
-    assert_contains(lines, "  model  qwen3.6-plus")
-    assert_contains(lines, "→ model  glm-5")
+    assert_contains(lines, "2/6")
+    assert_contains(lines, "  model  [1st]  qwen3.6-plus")
+    assert_contains(lines, "→ model  [1st]  glm-5")
+    assert_contains(lines, "  model  [1st]  kimi-k2")
+    assert_contains(lines, "  model  [2st]  deepseek-v4-pro")
     assert_not_contains(lines, "^[[B")
 
 
@@ -493,6 +680,8 @@ def assert_not_contains(lines: list[str], unexpected: str) -> None:
 
 def write_artifacts(
     artifact_dir: Path,
+    single_raw: bytes,
+    single_screen: TerminalScreen,
     initial_raw: bytes,
     initial_screen: TerminalScreen,
     down_raw: bytes,
@@ -500,12 +689,15 @@ def write_artifacts(
     run_raw: bytes,
     run_screen: TerminalScreen,
 ) -> None:
+    (artifact_dir / "single-account.raw").write_bytes(single_raw)
     (artifact_dir / "initial.raw").write_bytes(initial_raw)
     (artifact_dir / "after-down.raw").write_bytes(down_raw)
     (artifact_dir / "run.raw").write_bytes(run_raw)
+    (artifact_dir / "single-account.txt").write_text(render_text(single_screen), encoding="utf-8")
     (artifact_dir / "initial.txt").write_text(render_text(initial_screen), encoding="utf-8")
     (artifact_dir / "after-down.txt").write_text(render_text(down_screen), encoding="utf-8")
     (artifact_dir / "run.txt").write_text(render_text(run_screen), encoding="utf-8")
+    write_png(artifact_dir / "single-account.png", single_screen)
     write_png(artifact_dir / "initial.png", initial_screen)
     write_png(artifact_dir / "after-down.png", down_screen)
     write_png(artifact_dir / "run.png", run_screen)
@@ -513,6 +705,14 @@ def write_artifacts(
 
 def render_text(screen: TerminalScreen) -> str:
     return "\n".join(screen.semantic_lines()) + "\n"
+
+
+def screen_from_text(text: str) -> TerminalScreen:
+    screen = TerminalScreen(ROWS, COLS)
+    for line in strip_ansi(text).splitlines():
+        screen.feed(line.encode("utf-8", "replace"))
+        screen.feed(b"\n")
+    return screen
 
 
 def write_png(path: Path, screen: TerminalScreen) -> None:
@@ -565,6 +765,7 @@ def draw_colored_line(draw, font, line: str, y: int) -> None:
 def write_report(
     artifact_dir: Path,
     results: list[str],
+    single: TerminalScreen,
     initial: TerminalScreen,
     down: TerminalScreen,
     run_screen: TerminalScreen,
@@ -576,11 +777,17 @@ def write_report(
 {checklist}
 
 ## 产物
-- `initial.txt` / `after-down.txt` / `run.txt`
-- `initial.png` / `after-down.png` / `run.png`
-- `initial.raw` / `after-down.raw` / `run.raw`
+- `single-account.txt` / `initial.txt` / `after-down.txt` / `run.txt`
+- `single-account.png` / `initial.png` / `after-down.png` / `run.png`
+- `single-account.raw` / `initial.raw` / `after-down.raw` / `run.raw`
+- `config-home/` 保留本次测试配置目录
+- `reset-before.txt` / `reset-after.txt` 记录 reset 前后账户文件
 
-## 首帧
+## 单账户首帧
+```text
+{render_text(single)}```
+
+## 多账户首帧
 ```text
 {render_text(initial)}```
 

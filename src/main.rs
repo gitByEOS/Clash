@@ -101,9 +101,20 @@ fn do_update() -> Result<(), ()> {
 // ── config ─────────────────────────────────────────────────────────
 
 struct ConfigSetArgs {
+    idx: usize,
     base_url: Option<String>,
     auth_key: Option<String>,
     models: Option<String>,
+}
+
+struct RunModelChoice {
+    label: String,
+    model: String,
+    config: ClashConfig,
+}
+
+fn account_label(idx: usize) -> String {
+    format!("{}st", idx + 1)
 }
 
 /// 通用参数解析：遍历 args，遇 --xxx 取下一元素为值
@@ -134,16 +145,28 @@ pub fn parse_auth_args(args: &[String], flags: &[&str], verbose: bool) -> Result
     Ok(result)
 }
 
+fn parse_idx(value: &str) -> Result<usize, ()> {
+    value.parse::<usize>().map_err(|_| {
+        print_red("--idx 必须是 0 或正整数");
+    })
+}
+
 fn parse_config_set_args(args: &[String]) -> Result<ConfigSetArgs, ()> {
-    let map = parse_auth_args(args, &["--url", "--key", "--models"], true)?;
+    let map = parse_auth_args(args, &["--idx", "--url", "--key", "--models"], true)?;
+    let idx = map
+        .get("--idx")
+        .map(|value| parse_idx(value))
+        .transpose()?
+        .unwrap_or(0);
     Ok(ConfigSetArgs {
+        idx,
         base_url: map.get("--url").cloned(),
         auth_key: map.get("--key").cloned(),
         models: map.get("--models").cloned(),
     })
 }
 
-fn save_config(base_url: String, auth_token: String, models: Vec<String>) -> Result<(), ()> {
+fn save_config(idx: usize, base_url: String, auth_token: String, models: Vec<String>) -> Result<(), ()> {
     let cfg = ClashConfig {
         base_url,
         auth_token_encrypted: crypto::encrypt_token(&auth_token).map_err(|_| ())?,
@@ -151,14 +174,14 @@ fn save_config(base_url: String, auth_token: String, models: Vec<String>) -> Res
         models,
     };
 
-    config::write_config(&cfg).map_err(|_| ())?;
-    let config_path = config::config_path();
+    config::write_config_for_idx(idx, &cfg).map_err(|_| ())?;
+    let config_path = config::config_path_for_idx(idx);
     print_green(&format!("配置已保存到 {}", config_path.display()));
     print_green("API Key 已加密存储");
-    auto_test_after_config()
+    auto_test_after_config(idx)
 }
 
-fn do_configure_interactive() -> Result<(), ()> {
+fn do_configure_interactive_for_idx(idx: usize) -> Result<(), ()> {
     print_cyan("Clash 配置向导（以 DeepSeek 为例）");
 
     let mut buf = String::new();
@@ -193,11 +216,15 @@ fn do_configure_interactive() -> Result<(), ()> {
         }
     }
 
-    save_config(base_url, auth_token, model_list)
+    save_config(idx, base_url, auth_token, model_list)
 }
 
-fn load_config_for_update() -> Result<ClashConfig, ()> {
-    match config::read_config_raw() {
+fn do_configure_interactive() -> Result<(), ()> {
+    do_configure_interactive_for_idx(0)
+}
+
+fn load_config_for_update(idx: usize) -> Result<ClashConfig, ()> {
+    match config::read_config_raw_for_idx(idx) {
         Ok(cfg) => Ok(cfg),
         Err(config::ConfigError::NotFound) => Ok(ClashConfig {
             base_url: String::new(),
@@ -211,16 +238,18 @@ fn load_config_for_update() -> Result<ClashConfig, ()> {
 
 fn do_config(args: &[String]) -> Result<(), ()> {
     if args.is_empty() {
-        return do_config_show();
+        return do_config_show(0);
     }
 
     let parsed = parse_config_set_args(args)?;
     if parsed.base_url.is_none() && parsed.auth_key.is_none() && parsed.models.is_none() {
-        print_red("请至少提供一个 --url、--key 或 --models");
-        return Err(());
+        return match do_config_show(parsed.idx) {
+            Ok(()) => Ok(()),
+            Err(()) => do_configure_interactive_for_idx(parsed.idx),
+        };
     }
 
-    let mut cfg = load_config_for_update()?;
+    let mut cfg = load_config_for_update(parsed.idx)?;
 
     if let Some(base_url) = parsed.base_url {
         cfg.base_url = base_url;
@@ -237,17 +266,17 @@ fn do_config(args: &[String]) -> Result<(), ()> {
         cfg.models = models;
     }
 
-    config::write_config(&cfg).map_err(|_| ())?;
-    let config_path = config::config_path();
+    config::write_config_for_idx(parsed.idx, &cfg).map_err(|_| ())?;
+    let config_path = config::config_path_for_idx(parsed.idx);
     print_green(&format!("配置已保存到 {}", config_path.display()));
     if !cfg.auth_token_encrypted.is_empty() {
         print_green("API Key 已加密存储");
     }
-    auto_test_after_config()
+    auto_test_after_config(parsed.idx)
 }
 
-fn do_config_show() -> Result<(), ()> {
-    let cfg = config::read_config_raw().map_err(|_| {
+fn do_config_show(idx: usize) -> Result<(), ()> {
+    let cfg = config::read_config_raw_for_idx(idx).map_err(|_| {
         print_yellow("未配置，请运行 clash 进行初始化");
     })?;
 
@@ -256,7 +285,7 @@ fn do_config_show() -> Result<(), ()> {
         return Err(());
     }
 
-    print_cyan("=== 当前配置 ===");
+    print_cyan(&format!("=== 当前配置 idx={} ===", idx));
     if cfg.base_url.is_empty() {
         println!("BASE_URL=");
     } else {
@@ -286,50 +315,9 @@ fn do_config_show() -> Result<(), ()> {
 }
 
 fn do_reset() -> Result<(), ()> {
-    config::delete_config().map_err(|_| ())?;
-    print_green(&format!("已删除配置 {}", config::config_path().display()));
+    config::delete_all_configs().map_err(|_| ())?;
+    print_green(&format!("已删除全部配置 {}", config::config_dir().display()));
     Ok(())
-}
-
-// ── add-model ──────────────────────────────────────────────────────
-
-fn do_add_model(new_model: &str) -> Result<(), ()> {
-    let mut cfg = config::read_config().map_err(|_| {
-        print_red("未找到配置，请先运行 clash");
-    })?;
-
-    if new_model.is_empty() {
-        print_red("用法: clash add-model <模型名>");
-        return Err(());
-    }
-
-    if cfg.models.iter().any(|m| m == new_model) {
-        print_yellow(&format!("模型 {} 已存在", new_model));
-        return Ok(());
-    }
-
-    cfg.models.push(new_model.to_string());
-    config::write_config(&cfg).map_err(|_| ())?;
-    print_green(&format!("已添加模型: {}", new_model));
-    auto_test_after_config()
-}
-
-// ── change-token ───────────────────────────────────────────────────
-
-fn do_change_token(new_token: &str) -> Result<(), ()> {
-    let mut cfg = config::read_config().map_err(|_| {
-        print_red("未找到配置，请先运行 clash");
-    })?;
-
-    if new_token.is_empty() {
-        print_red("用法: clash change-token <新Key>");
-        return Err(());
-    }
-
-    cfg.auth_token_encrypted = crypto::encrypt_token(new_token).map_err(|_| ())?;
-    config::write_config(&cfg).map_err(|_| ())?;
-    print_green("API Key 已更新");
-    auto_test_after_config()
 }
 
 // ── test ───────────────────────────────────────────────────────────
@@ -387,12 +375,12 @@ fn run_model_probes(ctx: &api_test::TestContext) -> bool {
 }
 
 /// 配置写入后自动做连通测试；不完整或 CLASH_SKIP_AUTO_TEST=1 时跳过
-fn auto_test_after_config() -> Result<(), ()> {
+fn auto_test_after_config(idx: usize) -> Result<(), ()> {
     if should_skip_auto_test() {
         return Ok(());
     }
 
-    let cfg = match config::read_config_raw() {
+    let cfg = match config::read_config_raw_for_idx(idx) {
         Ok(c) => c,
         Err(_) => return Ok(()),
     };
@@ -403,6 +391,7 @@ fn auto_test_after_config() -> Result<(), ()> {
 
     print_cyan("正在进行 Anthropic 兼容 API 连通测试（curl POST /v1/messages）...");
     let opts = api_test::TestOptions {
+        idx,
         base_url: None,
         auth_key: None,
         model: None,
@@ -420,7 +409,7 @@ fn auto_test_after_config() -> Result<(), ()> {
 
 fn do_test(args: &[String]) -> Result<(), ()> {
     let opts = api_test::parse_test_args(args).map_err(|_| {
-        print_red("用法: clash test [--url <地址>] [--key <Key>] [--model <模型>]");
+        print_red("用法: clash test [--idx <编号>] [--url <地址>] [--key <Key>] [--model <模型>]");
     })?;
 
     print_cyan("正在进行 Anthropic 兼容 API 连通测试（curl POST /v1/messages）...");
@@ -439,33 +428,68 @@ fn do_test(args: &[String]) -> Result<(), ()> {
 
 // ── select and run ─────────────────────────────────────────────────
 
-fn do_select_and_run(extra_args: &[String]) -> Result<(), ()> {
-    let mut cfg = match config::read_config() {
-        Ok(c) => c,
-        Err(_) => {
-            print_yellow("未找到配置，请先配置厂商地址和 API Key");
-            do_configure_interactive()?;
-            config::read_config().map_err(|_| ())?
-        }
-    };
+fn collect_run_choices() -> Result<Vec<RunModelChoice>, ()> {
+    let slots = config::read_config_slots().map_err(|_| ())?;
+    let is_multi_account = slots.len() > 1;
+    let mut choices = Vec::new();
 
-    if cfg.base_url.is_empty() || cfg.auth_token_encrypted.is_empty() || cfg.models.is_empty() {
-        print_red("配置不完整，请重新配置");
-        do_configure_interactive()?;
-        cfg = config::read_config().map_err(|_| ())?;
+    for slot in slots {
+        for model in &slot.config.models {
+            let label = if is_multi_account {
+                format!("[{}]  {}", account_label(slot.idx), model)
+            } else {
+                model.clone()
+            };
+            choices.push(RunModelChoice {
+                label,
+                model: model.clone(),
+                config: slot.config.clone(),
+            });
+        }
     }
 
-    let auth_token = crypto::decrypt_token(&cfg.auth_token_encrypted).map_err(|_| {
+    Ok(choices)
+}
+
+fn load_run_choices() -> Result<Vec<RunModelChoice>, ()> {
+    let choices = collect_run_choices()?;
+    if !choices.is_empty() {
+        return Ok(choices);
+    }
+
+    print_yellow("未找到配置，请先配置厂商地址和 API Key");
+    do_configure_interactive()?;
+
+    let choices = collect_run_choices()?;
+    if choices.is_empty() {
+        print_red("配置不完整，请重新配置");
+        do_configure_interactive()?;
+        return collect_run_choices();
+    }
+
+    Ok(choices)
+}
+
+fn do_select_and_run(extra_args: &[String]) -> Result<(), ()> {
+    let choices = load_run_choices()?;
+    let labels = choices
+        .iter()
+        .map(|choice| choice.label.clone())
+        .collect::<Vec<_>>();
+    let selected_label = tui::select_model(&labels).ok_or(())?;
+    let choice = choices
+        .into_iter()
+        .find(|choice| choice.label == selected_label)
+        .ok_or(())?;
+
+    let auth_token = crypto::decrypt_token(&choice.config.auth_token_encrypted).map_err(|_| {
         print_red("无法解密 API Key");
     })?;
 
-    let model = tui::select_model(&cfg.models).ok_or(())?;
-
-    print_cyan(&format!("模型: {}", model));
-    print_cyan(&format!("地址: {}", cfg.base_url));
+    let model = choice.model;
 
     // Set environment variables
-    env::set_var("ANTHROPIC_BASE_URL", &cfg.base_url);
+    env::set_var("ANTHROPIC_BASE_URL", &choice.config.base_url);
     env::set_var("ANTHROPIC_AUTH_TOKEN", &auth_token);
     env::set_var("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
     env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1");
@@ -551,8 +575,6 @@ fn main() {
         "run" => exit_on_err(do_select_and_run(&args[1..])),
         "config" => exit_on_err(do_config(&args[1..])),
         "reset" => exit_on_err(do_reset()),
-        "add-model" => exit_on_err(do_add_model(args.get(1).map(|s| s.as_str()).unwrap_or(""))),
-        "change-token" => exit_on_err(do_change_token(args.get(1).map(|s| s.as_str()).unwrap_or(""))),
         "test" => exit_on_err(do_test(&args[1..])),
         _ => exit_on_err(do_select_and_run(&args)),
     }

@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $AppName = "clash"
-$AppVersion = "v0.1.1"
+$AppVersion = "v0.1.2"
 $DefaultRawBaseUrl = "https://raw.githubusercontent.com/gitByEOS/Clash/master"
 
 function Get-RawBaseUrl {
@@ -86,6 +86,28 @@ function Get-ConfigDir {
 $ConfigDir = Get-ConfigDir
 $ConfigFile = Join-Path $ConfigDir "auth"
 
+function Get-ConfigPath([int]$Idx = 0) {
+    if ($Idx -lt 0) {
+        throw "--idx 必须是 0 或正整数"
+    }
+    $fileName = if ($Idx -eq 0) { "auth" } else { "auth$Idx" }
+    return Join-Path $ConfigDir $fileName
+}
+
+function Get-AccountLabel([int]$Idx) {
+    return "$($Idx + 1)st"
+}
+
+function Get-ConfigIndexFromName([string]$Name) {
+    if ($Name -eq "auth") {
+        return 0
+    }
+    if ($Name -match '^auth(\d+)$') {
+        return [int]$Matches[1]
+    }
+    return $null
+}
+
 function Write-Info($Message) {
     Write-Host $Message -ForegroundColor Cyan
 }
@@ -117,12 +139,12 @@ function Unprotect-Token([string]$Value) {
     }
 }
 
-function Get-ConfigValue([string]$Key) {
-    if (-not (Test-Path $ConfigFile)) {
+function Get-ConfigValue([string]$Key, [string]$Path = $ConfigFile) {
+    if (-not (Test-Path $Path)) {
         return $null
     }
 
-    $line = Get-Content $ConfigFile | Where-Object { $_ -like "$Key=*" } | Select-Object -First 1
+    $line = Get-Content $Path | Where-Object { $_ -like "$Key=*" } | Select-Object -First 1
     if (-not $line) {
         return $null
     }
@@ -130,14 +152,14 @@ function Get-ConfigValue([string]$Key) {
     return $line.Substring($Key.Length + 1)
 }
 
-function Get-Models {
-    if (-not (Test-Path $ConfigFile)) {
+function Get-Models([string]$Path = $ConfigFile) {
+    if (-not (Test-Path $Path)) {
         return @()
     }
 
     $models = New-Object System.Collections.Generic.List[string]
     $inModels = $false
-    foreach ($line in Get-Content $ConfigFile) {
+    foreach ($line in Get-Content $Path) {
         if ($line -eq "MODELS=<<MODELS") {
             $inModels = $true
             continue
@@ -163,8 +185,8 @@ function Normalize-Models([string]$Models) {
     )
 }
 
-function Get-AuthToken {
-    $raw = Get-ConfigValue "AUTH_TOKEN"
+function Get-AuthToken([string]$Path = $ConfigFile) {
+    $raw = Get-ConfigValue "AUTH_TOKEN" $Path
     if (-not $raw) {
         return $null
     }
@@ -177,8 +199,9 @@ function Get-AuthToken {
     }
 }
 
-function Save-Config([string]$BaseUrl, [string]$Token, [string[]]$Models, [string]$CommandName = "clash") {
+function Save-Config([string]$BaseUrl, [string]$Token, [string[]]$Models, [string]$CommandName = "clash", [int]$Idx = 0) {
     New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    $path = Get-ConfigPath $Idx
 
     $encrypted = if ($Token) { Protect-Token $Token } else { "" }
     $content = @(
@@ -190,39 +213,44 @@ function Save-Config([string]$BaseUrl, [string]$Token, [string[]]$Models, [strin
         "MODELS=<<MODELS"
     ) + $Models + @("MODELS")
 
-    Set-Content -Path $ConfigFile -Value $content -Encoding UTF8
-    Invoke-ConfigProbe
+    Set-Content -Path $path -Value $content -Encoding UTF8
+    Invoke-ConfigProbe $Idx
 }
 
-function Invoke-ConfigProbe {
+function Invoke-ConfigProbe([int]$Idx = 0) {
     if ($env:CLASH_SKIP_AUTO_TEST -match '^(?i)(1|true|yes)$') {
         return
     }
 
-    $baseUrl = (Get-ConfigValue "BASE_URL").Trim().TrimEnd('/')
-    $token = Get-AuthToken
-    $models = @(Get-Models)
+    $path = Get-ConfigPath $Idx
+    $baseUrlRaw = Get-ConfigValue "BASE_URL" $path
+    $baseUrl = if ($baseUrlRaw) { $baseUrlRaw.Trim().TrimEnd('/') } else { "" }
+    $token = Get-AuthToken $path
+    $models = @(Get-Models $path)
 
     if (-not $baseUrl -or -not $token -or $models.Count -eq 0) {
         Write-Warn "配置不完整，跳过连通性测试"
         return
     }
 
+    Write-Info "正在进行 Anthropic 兼容 API 连通测试..."
+    Invoke-ModelProbes $baseUrl $token $models
+}
+
+function Invoke-ModelProbes([string]$BaseUrl, [string]$Token, [string[]]$Models) {
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if (-not $curl) {
         $curl = Get-Command curl -ErrorAction SilentlyContinue
     }
     if (-not $curl) {
-        Write-Warn "未找到 curl，跳过连通性测试"
-        return
+        throw "未找到 curl，请先安装 curl"
     }
 
+    $baseUrl = $BaseUrl.Trim().TrimEnd('/')
     $endpoint = if ($baseUrl -match '/v1$') { "$baseUrl/messages" } else { "$baseUrl/v1/messages" }
     $isDashscope = $baseUrl -match 'dashscope'
-
-    Write-Info "正在进行 Anthropic 兼容 API 连通测试..."
     $failed = 0
-    foreach ($model in $models) {
+    foreach ($model in $Models) {
         Write-Info "  连通测试 $model ..."
         [Console]::Out.Flush()
         $escaped = $model.Replace('\', '\\').Replace('"', '\"')
@@ -256,14 +284,15 @@ function Invoke-ConfigProbe {
     }
 
     if ($failed -gt 0) {
-        throw "$failed/$($models.Count) 个模型连通测试失败"
+        throw "$failed/$($Models.Count) 个模型连通测试失败"
     }
 
-    Write-Ok "全部通过（$($models.Count) 个模型）"
+    Write-Ok "全部通过（$($Models.Count) 个模型）"
 }
 
 function Parse-ConfigArgs([string[]]$InputArgs) {
     $result = @{
+        Idx = 0
         Url = ""
         Key = ""
         Models = ""
@@ -271,6 +300,12 @@ function Parse-ConfigArgs([string[]]$InputArgs) {
 
     for ($i = 0; $i -lt $InputArgs.Count; $i++) {
         switch ($InputArgs[$i]) {
+            "--idx" {
+                $i++
+                if ($i -ge $InputArgs.Count) { throw "--idx 缺少值" }
+                if ($InputArgs[$i] -notmatch '^\d+$') { throw "--idx 必须是 0 或正整数" }
+                $result.Idx = [int]$InputArgs[$i]
+            }
             "--url" {
                 $i++
                 if ($i -ge $InputArgs.Count) { throw "--url 缺少值" }
@@ -295,7 +330,7 @@ function Parse-ConfigArgs([string[]]$InputArgs) {
     return $result
 }
 
-function Invoke-ConfigInteractive {
+function Invoke-ConfigInteractive([int]$Idx = 0) {
     Write-Info "Clash 配置向导（以 DeepSeek 为例）"
 
     $baseUrl = Read-Host "API 地址 (如 https://api.deepseek.com/anthropic)"
@@ -317,21 +352,28 @@ function Invoke-ConfigInteractive {
         }
     }
 
-    Save-Config $baseUrl $token $models "clash"
-    Write-Ok "配置已保存到 $ConfigFile"
+    Save-Config $baseUrl $token $models "clash" $Idx
+    Write-Ok "配置已保存到 $(Get-ConfigPath $Idx)"
 }
 
 function Invoke-ConfigSet([string[]]$InputArgs) {
     $parsed = Parse-ConfigArgs $InputArgs
+    $path = Get-ConfigPath $parsed.Idx
 
     if (-not $parsed.Url -and -not $parsed.Key -and -not $parsed.Models) {
-        throw "请至少提供一个 --url、--key 或 --models"
+        try {
+            Show-Config $parsed.Idx
+        }
+        catch {
+            Invoke-ConfigInteractive $parsed.Idx
+        }
+        return
     }
 
-    $baseUrl = Get-ConfigValue "BASE_URL"
-    $token = Get-AuthToken
-    $models = @(Get-Models)
-    $name = Get-ConfigValue "COMMAND"
+    $baseUrl = Get-ConfigValue "BASE_URL" $path
+    $token = Get-AuthToken $path
+    $models = @(Get-Models $path)
+    $name = Get-ConfigValue "COMMAND" $path
     if (-not $name) {
         $name = "clash"
     }
@@ -352,8 +394,8 @@ function Invoke-ConfigSet([string[]]$InputArgs) {
         }
     }
 
-    Save-Config $baseUrl $token $models $name
-    Write-Ok "配置已保存到 $ConfigFile"
+    Save-Config $baseUrl $token $models $name $parsed.Idx
+    Write-Ok "配置已保存到 $path"
 }
 
 function Invoke-Config([string[]]$InputArgs) {
@@ -366,28 +408,31 @@ function Invoke-Config([string[]]$InputArgs) {
 }
 
 function Remove-Config {
-    if (Test-Path $ConfigFile) {
-        Remove-Item -Force $ConfigFile
+    if (Test-Path $ConfigDir) {
+        Get-ChildItem -Path $ConfigDir -File |
+            Where-Object { $null -ne (Get-ConfigIndexFromName $_.Name) } |
+            Remove-Item -Force
     }
 
-    Write-Ok "已删除配置 $ConfigFile"
+    Write-Ok "已删除全部配置 $ConfigDir"
 }
 
-function Show-Config {
-    if (-not (Test-Path $ConfigFile)) {
+function Show-Config([int]$Idx = 0) {
+    $path = Get-ConfigPath $Idx
+    if (-not (Test-Path $path)) {
         Write-Warn "未配置，请运行 clash 进行初始化"
-        return
+        throw "未配置"
     }
 
-    Write-Info "=== 当前配置 ==="
-    foreach ($line in Get-Content $ConfigFile) {
+    Write-Info "=== 当前配置 idx=$Idx ==="
+    foreach ($line in Get-Content $path) {
         if ($line -like "AUTH_TOKEN=*") {
             $raw = $line.Substring("AUTH_TOKEN=".Length)
             if (-not $raw) {
                 Write-Host "AUTH_TOKEN="
                 continue
             }
-            $token = Get-AuthToken
+            $token = Get-AuthToken $path
             if ($token -and $token.Length -ge 10) {
                 Write-Host ("AUTH_TOKEN={0}****{1} (DPAPI 加密存储)" -f $token.Substring(0, 5), $token.Substring($token.Length - 5))
             }
@@ -399,6 +444,69 @@ function Show-Config {
             Write-Host $line
         }
     }
+}
+
+function Parse-TestArgs([string[]]$InputArgs) {
+    $result = @{
+        Idx = 0
+        Url = ""
+        Key = ""
+        Model = ""
+    }
+
+    for ($i = 0; $i -lt $InputArgs.Count; $i++) {
+        switch ($InputArgs[$i]) {
+            "--idx" {
+                $i++
+                if ($i -ge $InputArgs.Count) { throw "--idx 缺少值" }
+                if ($InputArgs[$i] -notmatch '^\d+$') { throw "--idx 必须是 0 或正整数" }
+                $result.Idx = [int]$InputArgs[$i]
+            }
+            "--url" {
+                $i++
+                if ($i -ge $InputArgs.Count) { throw "--url 缺少值" }
+                $result.Url = $InputArgs[$i]
+            }
+            "--key" {
+                $i++
+                if ($i -ge $InputArgs.Count) { throw "--key 缺少值" }
+                $result.Key = $InputArgs[$i]
+            }
+            "--model" {
+                $i++
+                if ($i -ge $InputArgs.Count) { throw "--model 缺少值" }
+                $result.Model = $InputArgs[$i]
+            }
+            default {
+                throw "未知参数: $($InputArgs[$i])"
+            }
+        }
+    }
+
+    return $result
+}
+
+function Invoke-Test([string[]]$InputArgs) {
+    $parsed = Parse-TestArgs $InputArgs
+    $path = Get-ConfigPath $parsed.Idx
+
+    $baseUrl = if ($parsed.Url) { $parsed.Url } else { Get-ConfigValue "BASE_URL" $path }
+    if (-not $baseUrl) {
+        throw "缺少 BASE_URL，请先 clash config --url ..."
+    }
+
+    $token = if ($parsed.Key) { $parsed.Key } else { Get-AuthToken $path }
+    if (-not $token) {
+        throw "缺少 API Key，请先 clash config --key ..."
+    }
+
+    $models = if ($parsed.Model) { @($parsed.Model) } else { @(Get-Models $path) }
+    if ($models.Count -eq 0) {
+        throw "缺少模型，请配置 MODELS 或使用 --model"
+    }
+
+    Write-Info "正在进行 Anthropic 兼容 API 连通测试..."
+    Invoke-ModelProbes $baseUrl $token $models
 }
 
 function Add-Model([string]$Model) {
@@ -553,6 +661,10 @@ function Select-Model([string[]]$Models) {
         }
 
         function Get-FilteredModels([string[]]$SourceModels, [string]$Needle) {
+            if (-not $Needle) {
+                return @($SourceModels)
+            }
+
             $ranked = foreach ($model in $SourceModels) {
                 $score = Get-FuzzyScore $Needle $model
                 if ($null -ne $score) {
@@ -785,34 +897,75 @@ function Select-Model([string[]]$Models) {
     return $Models[0]
 }
 
+function Get-ConfigSlots {
+    if (-not (Test-Path $ConfigDir)) {
+        return @()
+    }
+
+    $slots = foreach ($file in Get-ChildItem -Path $ConfigDir -File) {
+        $idx = Get-ConfigIndexFromName $file.Name
+        if ($null -eq $idx) {
+            continue
+        }
+
+        $baseUrl = Get-ConfigValue "BASE_URL" $file.FullName
+        $token = Get-AuthToken $file.FullName
+        $models = @(Get-Models $file.FullName)
+        if ($baseUrl -and $token -and $models.Count -gt 0) {
+            [pscustomobject]@{
+                Idx = $idx
+                BaseUrl = $baseUrl
+                Token = $token
+                Models = $models
+            }
+        }
+    }
+
+    return @($slots | Sort-Object -Property { [int]$_.Idx })
+}
+
+function Get-RunChoices {
+    $slots = @(Get-ConfigSlots)
+    $isMultiAccount = $slots.Count -gt 1
+    $choices = foreach ($slot in $slots) {
+        foreach ($model in $slot.Models) {
+            $label = if ($isMultiAccount) { "[{0}]  {1}" -f (Get-AccountLabel $slot.Idx), $model } else { $model }
+            [pscustomobject]@{
+                Label = $label
+                Model = $model
+                BaseUrl = $slot.BaseUrl
+                Token = $slot.Token
+            }
+        }
+    }
+
+    return @($choices)
+}
+
 function Invoke-Claude([string[]]$ClaudeArgs) {
-    if (-not (Test-Path $ConfigFile)) {
+    $choices = @(Get-RunChoices)
+    if ($choices.Count -eq 0) {
         Write-Warn "未找到配置，请先配置厂商地址和 API Key"
         Invoke-ConfigInteractive
+        $choices = @(Get-RunChoices)
     }
 
-    $baseUrl = Get-ConfigValue "BASE_URL"
-    $token = Get-AuthToken
-    $models = @(Get-Models)
-
-    if (-not $baseUrl -or -not $token -or $models.Count -eq 0) {
+    if ($choices.Count -eq 0) {
         Write-Err "配置不完整，请重新配置"
         Invoke-ConfigInteractive
-        $baseUrl = Get-ConfigValue "BASE_URL"
-        $token = Get-AuthToken
-        $models = @(Get-Models)
+        $choices = @(Get-RunChoices)
     }
 
-    $model = Select-Model $models
-    if (-not $model) {
+    $labels = @($choices | ForEach-Object { $_.Label })
+    $label = Select-Model $labels
+    if (-not $label) {
         return
     }
+    $choice = $choices | Where-Object { $_.Label -eq $label } | Select-Object -First 1
+    $model = $choice.Model
 
-    Write-Info "模型: $model"
-    Write-Info "地址: $baseUrl"
-
-    $env:ANTHROPIC_BASE_URL = $baseUrl
-    $env:ANTHROPIC_AUTH_TOKEN = $token
+    $env:ANTHROPIC_BASE_URL = $choice.BaseUrl
+    $env:ANTHROPIC_AUTH_TOKEN = $choice.Token
     $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
     $env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
     $env:CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
@@ -839,8 +992,7 @@ try {
         "run" { Invoke-Claude $rest }
         "config" { Invoke-Config $rest }
         "reset" { Remove-Config }
-        "add-model" { Add-Model ($rest | Select-Object -First 1) }
-        "change-token" { Change-Token ($rest | Select-Object -First 1) }
+        "test" { Invoke-Test $rest }
         default { Invoke-Claude $CliArgs }
     }
 }

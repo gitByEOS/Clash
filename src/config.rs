@@ -3,6 +3,12 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
+pub struct ConfigSlot {
+    pub idx: usize,
+    pub config: ClashConfig,
+}
+
+#[derive(Debug, Clone)]
 pub struct ClashConfig {
     pub base_url: String,
     pub auth_token_encrypted: String,
@@ -28,15 +34,25 @@ impl std::fmt::Display for ConfigError {
 }
 
 /// Resolve config file path: $XDG_CONFIG_HOME/clash/auth or $HOME/.config/clash/auth
-pub fn config_path() -> PathBuf {
-    let config_dir = env::var("XDG_CONFIG_HOME")
+pub fn config_dir() -> PathBuf {
+    env::var("XDG_CONFIG_HOME")
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             let home = env::var("HOME").unwrap_or_else(|_| "/root".to_string());
             PathBuf::from(home).join(".config")
-        });
-    config_dir.join("clash").join("auth")
+        })
+        .join("clash")
+}
+
+/// Resolve config file path: idx 0 -> auth, idx n -> authn
+pub fn config_path_for_idx(idx: usize) -> PathBuf {
+    let file_name = if idx == 0 {
+        "auth".to_string()
+    } else {
+        format!("auth{idx}")
+    };
+    config_dir().join(file_name)
 }
 
 /// Normalize models string: split by comma, trim, filter empty
@@ -48,9 +64,8 @@ pub fn normalize_models(input: &str) -> Vec<String> {
         .collect()
 }
 
-/// 读取配置文件，允许字段不完整
-pub fn read_config_raw() -> Result<ClashConfig, ConfigError> {
-    let path = config_path();
+pub fn read_config_raw_for_idx(idx: usize) -> Result<ClashConfig, ConfigError> {
+    let path = config_path_for_idx(idx);
     let content = fs::read_to_string(&path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => ConfigError::NotFound,
         _ => ConfigError::IoError(e),
@@ -59,9 +74,8 @@ pub fn read_config_raw() -> Result<ClashConfig, ConfigError> {
     Ok(parse_config_content(&content))
 }
 
-/// Parse config file
-pub fn read_config() -> Result<ClashConfig, ConfigError> {
-    let cfg = read_config_raw()?;
+pub fn read_config_for_idx(idx: usize) -> Result<ClashConfig, ConfigError> {
+    let cfg = read_config_raw_for_idx(idx)?;
     if cfg.base_url.is_empty() || cfg.auth_token_encrypted.is_empty() {
         return Err(ConfigError::ParseError(
             "缺少 BASE_URL 或 AUTH_TOKEN".to_string(),
@@ -99,10 +113,8 @@ fn parse_config_content(content: &str) -> ClashConfig {
                 "BASE_URL" => base_url = value.to_string(),
                 "AUTH_TOKEN" => auth_token_encrypted = value.to_string(),
                 "COMMAND" => command = value.to_string(),
-                "MODELS" => {
-                    if value == "<<MODELS" {
-                        in_models = true;
-                    }
+                "MODELS" if value == "<<MODELS" => {
+                    in_models = true;
                 }
                 _ => {}
             }
@@ -121,9 +133,8 @@ fn parse_config_content(content: &str) -> ClashConfig {
     }
 }
 
-/// Write config file
-pub fn write_config(cfg: &ClashConfig) -> Result<(), ConfigError> {
-    let path = config_path();
+pub fn write_config_for_idx(idx: usize, cfg: &ClashConfig) -> Result<(), ConfigError> {
+    let path = config_path_for_idx(idx);
 
     // Create parent directory
     if let Some(parent) = path.parent() {
@@ -161,14 +172,69 @@ pub fn write_config(cfg: &ClashConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// 删除配置文件
-pub fn delete_config() -> Result<(), ConfigError> {
-    let path = config_path();
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(ConfigError::IoError(e)),
+fn parse_config_idx(file_name: &str) -> Option<usize> {
+    if file_name == "auth" {
+        return Some(0);
     }
+    let suffix = file_name.strip_prefix("auth")?;
+    if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse::<usize>().ok()
+}
+
+pub fn read_config_slots() -> Result<Vec<ConfigSlot>, ConfigError> {
+    let dir = config_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(ConfigError::IoError(e)),
+    };
+
+    let mut indices = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(ConfigError::IoError)?;
+        let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        if let Some(idx) = parse_config_idx(&file_name) {
+            indices.push(idx);
+        }
+    }
+    indices.sort_unstable();
+    indices.dedup();
+
+    let mut slots = Vec::new();
+    for idx in indices {
+        if let Ok(config) = read_config_for_idx(idx) {
+            if !config.models.is_empty() {
+                slots.push(ConfigSlot { idx, config });
+            }
+        }
+    }
+
+    Ok(slots)
+}
+
+pub fn delete_all_configs() -> Result<(), ConfigError> {
+    let dir = config_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(ConfigError::IoError(e)),
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(ConfigError::IoError)?;
+        let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        if parse_config_idx(&file_name).is_some() {
+            fs::remove_file(entry.path()).map_err(ConfigError::IoError)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(unreachable_code)]
@@ -263,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_config_path_default() {
-        let path = config_path();
+        let path = config_path_for_idx(0);
         assert!(path.ends_with("clash/auth"));
     }
 }
