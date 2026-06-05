@@ -41,7 +41,7 @@ download_artifacts() {
 main() {
     require_gh
 
-    info "触发 $WORKFLOW，分支: $BRANCH"
+    info "触发 ${WORKFLOW}，分支: ${BRANCH}"
     gh workflow run "$WORKFLOW" --ref "$BRANCH" -f publish=false
 
     info "等待 workflow run 出现"

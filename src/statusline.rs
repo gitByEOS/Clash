@@ -226,7 +226,11 @@ pub(crate) fn do_statusline() {
         + usage.cache_creation_input_tokens.unwrap_or(0)
         + usage.cache_read_input_tokens.unwrap_or(0);
 
-    let pct = if size > 0 { (current * 100 / size).min(100) } else { 0 };
+    let pct = current
+        .saturating_mul(100)
+        .checked_div(size)
+        .unwrap_or(0)
+        .min(100);
 
     let session_duration = parsed
         .cost

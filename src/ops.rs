@@ -269,9 +269,8 @@ pub fn do_reset(_print_red: fn(&str), _print_green: fn(&str)) -> Result<(), ()> 
     Ok(())
 }
 
-// ── rename (macOS only) ──────────────────────────────────────
+// ── rename ───────────────────────────────────────────────────
 
-#[cfg(target_os = "macos")]
 pub fn do_rename(
     _print_red: fn(&str),
     _print_green: fn(&str),

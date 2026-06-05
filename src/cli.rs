@@ -119,7 +119,6 @@ pub fn launch() {
         "config" => exit_on_err(do_config(&args[1..], print_red, print_green, print_yellow, print_cyan, parse_config_set_args)),
         "reset" => exit_on_err(do_reset(print_red, print_green)),
         "test" => exit_on_err(do_test(&args[1..], print_red, print_green, print_yellow, print_cyan)),
-        #[cfg(target_os = "macos")]
         "rename" => exit_on_err(do_rename(print_red, print_green, print_yellow, print_cyan)),
         _ => exit_on_err(do_select_and_run(&args, print_red, print_green, print_yellow, print_cyan)),
     }
