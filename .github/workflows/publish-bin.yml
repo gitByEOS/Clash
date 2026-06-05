@@ -1,0 +1,100 @@
+name: publish-bin
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "写回 master/bin 并提交"
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: clash-x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: clash-aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: clash-x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: clash-aarch64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add "${{ matrix.target }}"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target "${{ matrix.target }}"
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/clash" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+          file "dist/${{ matrix.asset }}"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: publish to master/bin
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: .dist
+
+      - name: Copy binaries to bin
+        run: |
+          mkdir -p bin
+          find .dist -type f -name 'clash-*' -exec cp {} bin/ \;
+          chmod +x bin/clash-*
+          file bin/clash-*
+
+      - name: Verify install script
+        run: |
+          bash -n install.sh
+          install_dir="$(mktemp -d)"
+          script_dir="$(mktemp -d)"
+          cp install.sh "$script_dir/install.sh"
+          CLASH_INSTALL_BASE_URL="file://$PWD" CLASH_INSTALL_DIR="$install_dir" bash "$script_dir/install.sh"
+          "$install_dir/clash" version
+

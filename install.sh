@@ -43,15 +43,33 @@ local_binary() {
     return 1
 }
 
+remote_binary_name() {
+    local os arch
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "$os:$arch" in
+        Darwin:x86_64) printf 'clash-x86_64-apple-darwin' ;;
+        Darwin:arm64|Darwin:aarch64) printf 'clash-aarch64-apple-darwin' ;;
+        Linux:x86_64) printf 'clash-x86_64-unknown-linux-gnu' ;;
+        Linux:arm64|Linux:aarch64) printf 'clash-aarch64-unknown-linux-gnu' ;;
+        *)
+            fail "暂不支持当前平台: $os $arch"
+            return 1
+            ;;
+    esac
+}
+
 install_from_local_project() {
     local source="$1"
     cp "$source" "$TARGET"
 }
 
 install_from_remote() {
-    local tmp_file
+    local tmp_file binary_name
+    binary_name="$(remote_binary_name)"
     tmp_file="$(mktemp)"
-    download_file "$RAW_BASE_URL/bin/clash" "$tmp_file"
+    download_file "$RAW_BASE_URL/bin/$binary_name" "$tmp_file"
     cp "$tmp_file" "$TARGET"
     rm -f "$tmp_file"
 }

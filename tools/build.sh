@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# 编译 release 并发布到 bin/clash
+# 编译 release 并发布到 bin/<platform>
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCE="$ROOT/target/release/clash"
-OUT="$ROOT/bin/clash"
 
 info() { printf '\033[1;36m%s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m%s\033[0m\n' "$*"; }
@@ -42,16 +41,35 @@ build_release() {
     RUSTUP_TOOLCHAIN=stable "$cargo" build --release
 }
 
+binary_name() {
+    local os arch
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "$os:$arch" in
+        Darwin:x86_64) printf 'clash-x86_64-apple-darwin' ;;
+        Darwin:arm64|Darwin:aarch64) printf 'clash-aarch64-apple-darwin' ;;
+        Linux:x86_64) printf 'clash-x86_64-unknown-linux-gnu' ;;
+        Linux:arm64|Linux:aarch64) printf 'clash-aarch64-unknown-linux-gnu' ;;
+        *)
+            fail "暂不支持当前平台: $os $arch"
+            return 1
+            ;;
+    esac
+}
+
 publish_binary() {
+    local out
     if [[ ! -f "$SOURCE" ]]; then
         fail "未找到构建产物: $SOURCE"
         return 1
     fi
 
+    out="$ROOT/bin/$(binary_name)"
     mkdir -p "$ROOT/bin"
-    cp "$SOURCE" "$OUT"
-    chmod +x "$OUT"
-    ok "已发布: $OUT"
+    cp "$SOURCE" "$out"
+    chmod +x "$out"
+    ok "已发布: $out"
 }
 
 main() {
@@ -61,7 +79,7 @@ main() {
     cd "$ROOT"
     info "编译 release..."
     build_release "$cargo"
-    info "发布到 bin/clash"
+    info "发布到 bin 平台产物"
     publish_binary
 }
 
