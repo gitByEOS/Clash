@@ -2,7 +2,9 @@
 
 ## v0.1.3
 
-- `clash rename` 支持别名
+- 支持别名: `clash rename` 
+- 支持参数穿透
+- 自带statusline
 
 ## v0.1.2
 

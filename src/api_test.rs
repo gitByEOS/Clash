@@ -1,6 +1,6 @@
 use crate::config;
 use crate::crypto;
-use crate::parse_auth_args;
+use crate::cli::parse_auth_args;
 use std::io;
 use std::process::{Command, Stdio};
 

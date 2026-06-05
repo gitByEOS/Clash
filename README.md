@@ -17,6 +17,7 @@
 | 凭据存储 | 明文 | 存储 |
 | 连通测试 | 无 | 自动测试 |
 | 启动可用 | 不确定 | 确定 |
+| 状态栏 | 额外下载 | 自动接入 |
 
 ## 启动效果图
 VS Code 为例：
@@ -87,7 +88,7 @@ clash reset                   # 删除全部账户配置
 clash test                    # 测试所有账户的所有模型（默认）
 clash test --idx 1            # 只测 idx1 的 MODELS
 clash test --idx 1 --model m  # 只测 idx1 的单个模型
-clash rename                  # 交互式修改账户别名（仅 macOS）
+clash rename                  # 交互式修改账户别名
 ```
 
 ## 配置路径
