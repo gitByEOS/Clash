@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $AppName = "clash"
-$AppVersion = "v0.1.3"
+$AppVersion = "v0.1.4"
 $DefaultRawBaseUrl = "https://raw.githubusercontent.com/gitByEOS/Clash/master"
 
 function Get-RawBaseUrl {
@@ -85,6 +85,153 @@ function Get-ConfigDir {
 
 $ConfigDir = Get-ConfigDir
 $ConfigFile = Join-Path $ConfigDir "auth"
+$UpdateCheckFile = Join-Path $ConfigDir "app_config"
+$SystemPromptFile = Join-Path $ConfigDir "system-prompt"
+
+function Get-UpdateConfig {
+    if (-not (Test-Path $UpdateCheckFile)) {
+        return @{ last_check_ts = 0; ignored_version = "" }
+    }
+
+    $cfg = @{ last_check_ts = 0; ignored_version = "" }
+    foreach ($line in Get-Content $UpdateCheckFile) {
+        if ($line -match '^last_check_ts=(\d+)') {
+            $cfg.last_check_ts = [int64]$Matches[1]
+        }
+        elseif ($line -match '^ignored_version=(.*)') {
+            $cfg.ignored_version = $Matches[1]
+        }
+    }
+    return $cfg
+}
+
+function Set-UpdateConfig($Ts, $Ignored) {
+    $content = @(
+        "last_check_ts=$Ts"
+        "ignored_version=$Ignored"
+    )
+    Set-Content -Path $UpdateCheckFile -Value $content -Encoding UTF8
+}
+
+function Ensure-SystemPromptFile {
+    if (-not (Test-Path $ConfigDir)) {
+        New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    }
+    if (-not (Test-Path $SystemPromptFile)) {
+        Set-Content -Path $SystemPromptFile -Value "" -Encoding UTF8
+    }
+}
+
+function Get-SystemPrompt {
+    Ensure-SystemPromptFile
+    if (-not (Test-Path $SystemPromptFile)) {
+        return $null
+    }
+    $content = Get-Content -Path $SystemPromptFile -Raw -ErrorAction SilentlyContinue
+    if (-not $content) {
+        return $null
+    }
+    $trimmed = $content.Trim()
+    if ($trimmed -eq "") {
+        return $null
+    }
+    return $trimmed
+}
+
+function Get-CurrentTs {
+    # 使用 PowerShell 的 Unix 时间戳
+    return [int64](Get-Date).ToUniversalTime().Subtract([DateTime]::new(1970, 1, 1)).TotalSeconds
+}
+
+function Test-NeedUpdateCheck {
+    $cfg = Get-UpdateConfig
+    $currentTs = Get-CurrentTs
+    $interval = 3 * 24 * 60 * 60  # 3 days in seconds
+
+    # 首次或间隔 >= 3天
+    return $cfg.last_check_ts -eq 0 -or ($currentTs - $cfg.last_check_ts) -ge $interval
+}
+
+function Get-ClaudeLatestVersion {
+    $output = npm -g outdated @anthropic-ai/claude-code 2>&1 | Out-String
+    foreach ($line in $output -split "`n") {
+        if ($line -match '@anthropic-ai/claude-code\s+\S+\s+\S+\s+(\S+)') {
+            return $Matches[1]
+        }
+    }
+    return $null
+}
+
+function Get-ClaudeCurrentVersion {
+    try {
+        $output = claude --version 2>&1 | Out-String
+        # 输出格式: "2.1.166 (Claude Code)" 或 "v2.1.166"
+        if ($output -match 'v(\d+\.\d+\.\d+)') {
+            return $Matches[1]  # 去掉 v
+        }
+        if ($output -match '^(\d+\.\d+\.\d+)') {
+            return $Matches[1]
+        }
+    }
+    catch {}
+    return "未知"
+}
+
+function Invoke-ClaudeUpdate {
+    Write-Info "正在更新 Claude Code..."
+    npm -g update @anthropic-ai/claude-code --silent 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Claude Code 更新成功"
+        return $true
+    }
+    else {
+        Write-Err "更新失败，请手动执行: npm -g update @anthropic-ai/claude-code"
+        return $false
+    }
+}
+
+function Maybe-CheckClaudeUpdate {
+    if (-not (Test-NeedUpdateCheck)) {
+        return
+    }
+
+    $cfg = Get-UpdateConfig
+    $currentTs = Get-CurrentTs
+
+    # 更新检查时间戳
+    Set-UpdateConfig $currentTs $cfg.ignored_version
+
+    # 检查是否有更新
+    $latest = Get-ClaudeLatestVersion
+    if (-not $latest) {
+        return
+    }
+
+    # 检查是否被用户忽略
+    if ($cfg.ignored_version -eq $latest) {
+        Write-Warn "Claude Code $latest 已被忽略，跳过更新检查"
+        return
+    }
+
+    # 获取当前版本
+    $current = Get-ClaudeCurrentVersion
+
+    # 使用 TUI 选择器
+    Write-Info "Claude Code 有新版本: $current -> $latest"
+    $options = @("更新到 $latest", "忽略此版本")
+    $selected = Select-Item $options "Claude Code 更新"
+
+    if ($selected -and $selected.StartsWith("更新")) {
+        if (Invoke-ClaudeUpdate) {
+            Set-UpdateConfig $currentTs ""
+        }
+    }
+    elseif ($selected -eq "忽略此版本") {
+        Write-Warn "已忽略 Claude Code $latest"
+        Set-UpdateConfig $currentTs $latest
+    }
+    # 用户取消则不做任何操作
+}
 
 function Get-ConfigPath([int]$Idx = 0) {
     if ($Idx -lt 0) {
@@ -375,6 +522,7 @@ function Invoke-ConfigInteractive([int]$Idx = 0) {
 }
 
 function Invoke-ConfigSet([string[]]$InputArgs) {
+    Ensure-SystemPromptFile
     $parsed = Parse-ConfigArgs $InputArgs
     $path = Get-ConfigPath $parsed.Idx
 
@@ -649,7 +797,6 @@ function Select-Item([string[]]$Items, [string]$Title) {
         $selected = 0
         $offset = 0
         $markerCols = 2
-        $rowPrefix = "model  "
         $helpText = "$Title | ↑/↓ 选择, Enter 确认, Esc 退出"
 
         function Write-Tui([string]$Text) {
@@ -779,9 +926,10 @@ function Select-Item([string[]]$Items, [string]$Title) {
             Write-TuiLine $Text $style
         }
 
-        function Write-SelectorRow([string]$ItemName, [string]$Needle, [bool]$IsSelected) {
+        function Write-SelectorRow([string]$ItemName, [string]$Needle, [bool]$IsSelected, [int]$Index) {
             $width = Get-FrameWidth
-            $itemWidth = [Math]::Max(0, $width - $markerCols - $rowPrefix.Length)
+            $prefix = "{0}. " -f $Index  # "1. " "2. "
+            $itemWidth = [Math]::Max(0, $width - $markerCols - $prefix.Length)
             $mask = Get-MatchMask $ItemName $Needle
             $rowStyle = if ($IsSelected) { "${esc}[48;5;53m${esc}[37m" } else { "${esc}[37m" }
 
@@ -793,7 +941,7 @@ function Select-Item([string[]]$Items, [string]$Title) {
                 Write-Tui "  "
             }
 
-            Write-Tui $rowPrefix
+            Write-Tui $prefix
 
             $written = 0
             for ($i = 0; $i -lt $ItemName.Length; $i++) {
@@ -874,7 +1022,7 @@ function Select-Item([string[]]$Items, [string]$Title) {
                 else {
                     $end = [Math]::Min($filtered.Count, $offset + $listHeight)
                     for ($i = $offset; $i -lt $end; $i++) {
-                        Write-SelectorRow $filtered[$i] $query ($i -eq $selected)
+                        Write-SelectorRow $filtered[$i] $query ($i -eq $selected) ($i + 1)
                     }
                 }
 
@@ -1050,6 +1198,38 @@ function Invoke-Rename {
     Write-Ok "账户已重命名为: $newLabel"
 }
 
+function Find-ClaudeBinary {
+    $claude = Get-Command claude -ErrorAction SilentlyContinue
+    if ($claude) {
+        return $claude.Source
+    }
+
+    Write-Info "未找到 claude，正在安装 @anthropic-ai/claude-code@latest ..."
+
+    $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        Write-Err "未找到 npm，请先安装 Node.js"
+        throw "npm not found"
+    }
+
+    & npm install -g @anthropic-ai/claude-code@latest --silent 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "npm install 失败，请手动执行: npm install -g @anthropic-ai/claude-code@latest"
+        throw "npm install failed"
+    }
+
+    Write-Ok "claude 安装成功"
+
+    # 重新查找
+    $claude = Get-Command claude -ErrorAction SilentlyContinue
+    if ($claude) {
+        return $claude.Source
+    }
+
+    Write-Err "安装成功但仍未找到 claude，请确认 npm 全局路径在 PATH 中"
+    throw "claude not found after install"
+}
+
 function Invoke-Claude([string[]]$ClaudeArgs) {
     $choices = @(Get-RunChoices)
     if ($choices.Count -eq 0) {
@@ -1086,7 +1266,22 @@ function Invoke-Claude([string[]]$ClaudeArgs) {
     $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $model
     $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $model
 
-    & claude --permission-mode bypassPermissions --effort max --model $model @ClaudeArgs
+    $claudePath = Find-ClaudeBinary
+    Maybe-CheckClaudeUpdate
+
+    # 构建参数列表
+    $claudeArgsList = @("--permission-mode", "bypassPermissions", "--effort", "max", "--model", $model)
+
+    # 追加系统提示词
+    $systemPrompt = Get-SystemPrompt
+    if ($systemPrompt) {
+        $claudeArgsList += @("--append-system-prompt", $systemPrompt)
+    }
+
+    # 追加用户参数
+    $claudeArgsList += $ClaudeArgs
+
+    & $claudePath $claudeArgsList
     exit $LASTEXITCODE
 }
 

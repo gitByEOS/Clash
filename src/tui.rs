@@ -417,6 +417,7 @@ fn render(out: &mut impl Write, state: &mut State) {
             i == sel,
             frame_width,
             theme,
+            i + 1,  // 数字索引
         );
         line_count += 1;
     }
@@ -481,16 +482,17 @@ fn render_help(out: &mut impl Write, width: usize, theme: &Theme, title: &str) {
 
 fn render_row(
     out: &mut impl Write,
-    model: &str,
+    item: &str,
     query: &str,
     selected: bool,
     width: usize,
     theme: &Theme,
+    index: usize,
 ) {
     begin_line(out);
-    let prefix = "model  ";
-    let used = MARKER_END_COL as usize + display_width(prefix);
-    let model_width = width.saturating_sub(used);
+    let prefix = format!("{}. ", index);  // "1. " "2. "
+    let used = MARKER_END_COL as usize + display_width(&prefix);
+    let item_width = width.saturating_sub(used);
 
     apply_row_style(out, selected, theme);
     if selected {
@@ -502,9 +504,9 @@ fn render_row(
     }
     let _ = execute!(out, MoveToColumn(MARKER_END_COL));
     let _ = write!(out, "{}", prefix);
-    let rendered = render_highlighted(out, model, query, selected, model_width, theme);
+    let rendered = render_highlighted(out, item, query, selected, item_width, theme);
     apply_row_style(out, selected, theme);
-    clear_to_width(out, model_width.saturating_sub(rendered));
+    clear_to_width(out, item_width.saturating_sub(rendered));
     reset_style(out);
     finish_line(out);
 }

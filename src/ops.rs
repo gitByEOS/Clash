@@ -1,4 +1,5 @@
 use crate::api_test;
+use crate::claude;
 use crate::cli::{ConfigSetArgs, print_red, print_green, print_yellow, print_cyan};
 use crate::config::{self, ClashConfig, ConfigSlot};
 use crate::crypto;
@@ -185,6 +186,7 @@ pub fn do_config(
     parse_fn: fn(&[String]) -> Result<ConfigSetArgs, ()>,
 ) -> Result<(), ()> {
     statusline::ensure_statusline_config();
+    config::ensure_system_prompt_file();
 
     if args.is_empty() {
         return do_config_show(0);
@@ -559,23 +561,38 @@ pub fn do_select_and_run(
     env::set_var("ANTHROPIC_DEFAULT_OPUS_MODEL", &model);
     env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", &model);
 
-    let claude_path = find_claude_binary();
-    let mut cmd_args = vec![
-        "--permission-mode",
-        "bypassPermissions",
-        "--effort",
-        "max",
-        "--model",
-        &model,
+    let claude_path = claude::find_claude_binary()?;
+    claude::maybe_check_update();
+
+    // 读取系统提示词（从 ~/.config/clash/system-prompt）
+    let system_prompt = config::read_system_prompt();
+
+    let mut cmd_args: Vec<String> = vec![
+        "--permission-mode".to_string(),
+        "bypassPermissions".to_string(),
+        "--effort".to_string(),
+        "max".to_string(),
+        "--model".to_string(),
+        model.clone(),
     ];
+
+    // 追加系统提示词（使用文件方式传递多行内容）
+    if system_prompt.is_some() {
+        let sp_path = config::system_prompt_path();
+        cmd_args.push("--append-system-prompt-file".to_string());
+        cmd_args.push(sp_path.to_string_lossy().to_string());
+    }
+
     for arg in extra_args {
-        cmd_args.push(arg.as_str());
+        cmd_args.push(arg.clone());
     }
 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let err = process::Command::new(&claude_path).args(&cmd_args).exec();
+        let err = process::Command::new(&claude_path)
+            .args(&cmd_args)
+            .exec();
         print_red(&format!("exec claude 失败: {}", err));
         process::exit(127);
     }
@@ -591,16 +608,4 @@ pub fn do_select_and_run(
 
     #[allow(unreachable_code)]
     Ok(())
-}
-
-fn find_claude_binary() -> String {
-    if let Ok(path_env) = env::var("PATH") {
-        for dir in path_env.split(':') {
-            let candidate = format!("{}/claude", dir);
-            if std::path::Path::new(&candidate).exists() {
-                return candidate;
-            }
-        }
-    }
-    "claude".to_string()
 }

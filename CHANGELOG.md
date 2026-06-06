@@ -1,5 +1,10 @@
 # ChangeLog
 
+## v0.1.4
+
+- 支持追加系统提示词
+- 增加通过`npm`安装以及管理`claude`版本
+
 ## v0.1.3
 
 - 支持别名: `clash rename` 

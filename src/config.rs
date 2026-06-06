@@ -56,6 +56,35 @@ pub fn config_path_for_idx(idx: usize) -> PathBuf {
     config_dir().join(file_name)
 }
 
+/// System prompt file path: ~/.config/clash/system-prompt
+pub fn system_prompt_path() -> PathBuf {
+    config_dir().join("system-prompt")
+}
+
+/// Ensure system-prompt file exists, create if not
+pub fn ensure_system_prompt_file() {
+    let path = system_prompt_path();
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&path, crate::prompts::DEFAULT_SYSTEM_PROMPT);
+    }
+}
+
+/// Read system prompt from file, create default if not exists
+pub fn read_system_prompt() -> Option<String> {
+    ensure_system_prompt_file();
+    let path = system_prompt_path();
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Normalize models string: split by comma, trim, filter empty
 pub fn normalize_models(input: &str) -> Vec<String> {
     input
