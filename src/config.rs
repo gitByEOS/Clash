@@ -278,7 +278,10 @@ fn chrono_like_timestamp() -> String {
     #[cfg(unix)]
     {
         let now = std::time::SystemTime::now();
-        let secs = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
+        let secs = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as libc::time_t;
         let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
         if unsafe { libc::localtime_r(&secs, tm.as_mut_ptr()) }.is_null() {
             return utc_timestamp();
@@ -331,10 +334,17 @@ fn utc_timestamp() -> String {
         .iter()
         .enumerate()
         .fold((1, days + 1), |(m, d), (i, md)| {
-            if d > *md { (i as u64 + 2, d - *md) } else { (m, d) }
+            if d > *md {
+                (i as u64 + 2, d - *md)
+            } else {
+                (m, d)
+            }
         });
 
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 fn is_leap_year(year: u64) -> bool {

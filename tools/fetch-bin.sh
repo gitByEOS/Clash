@@ -65,7 +65,8 @@ required_remote_assets() {
         clash-x86_64-apple-darwin \
         clash-aarch64-apple-darwin \
         clash-x86_64-unknown-linux-gnu \
-        clash-aarch64-unknown-linux-gnu
+        clash-aarch64-unknown-linux-gnu \
+        clash-x86_64-pc-windows-msvc.exe
     do
         if [[ "$asset" != "$local_name" ]]; then
             printf '%s\n' "$asset"
@@ -122,7 +123,7 @@ download_artifacts() {
     done
     mkdir -p "$ROOT/bin"
     find "$DOWNLOAD_DIR" -type f -name 'clash-*' -exec cp {} "$ROOT/bin/" \;
-    chmod +x "$ROOT"/bin/clash-*
+    find "$ROOT/bin" -type f ! -name '*.exe' -name 'clash-*' -exec chmod +x {} \;
 }
 
 main() {

@@ -5,8 +5,9 @@
 | 脚本 | 描述 | 运行方式 |
 |------|------|----------|
 | `test_features.py` | Rust CLI/TUI 测试 | `python3 e2e/test_features.py` |
-| `test_features_pwsh.py` | PowerShell CLI/TUI 测试 | `python3 e2e/test_features_pwsh.py` |
 | `test_statusline.py` | Statusline 功能测试 | `python3 e2e/test_statusline.py` |
+
+Windows 从 `v0.1.5` 起使用 Rust `clash.exe`，不再维护 PowerShell 业务实现测试。
 
 ## 命令覆盖
 
@@ -20,6 +21,7 @@
 | `reset` | 删除所有配置 | ✅ | ✅ | |
 | `test` | API 连通测试 | ✅ | ✅ | Mock HTTP Server |
 | `rename` | 重命名账户 | ✅ | ✅ | 通过 config 写入 NAME |
+| `prompt` | 捕获 Claude Code 请求提示词 | ❌ | ❌ | Rust 功能已实现，E2E 待补；Windows 通过 exe 同步能力 |
 | 默认（无命令） | 同 `run` | ✅ | ✅ | |
 
 ## config 子命令覆盖

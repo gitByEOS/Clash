@@ -447,9 +447,11 @@ def test_removed_commands(env: dict[str, str]) -> None:
         change_token = run_clash(["change-token", "sk-new"], run_env)
 
     assert add_model.returncode == 0
-    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus add-model new-model" in add_model.stdout
+    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus" in add_model.stdout
+    assert "add-model new-model" in add_model.stdout
     assert change_token.returncode == 0
-    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus change-token sk-new" in change_token.stdout
+    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus" in change_token.stdout
+    assert "change-token sk-new" in change_token.stdout
 
 
 def test_rename_via_config(env: dict[str, str], idx: int, new_name: str) -> None:

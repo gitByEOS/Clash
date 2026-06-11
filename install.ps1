@@ -21,20 +21,32 @@ function Write-Warn($Message) {
     Write-Host $Message -ForegroundColor Yellow
 }
 
-function Install-FromLocalProject($TargetScript) {
-    $source = Join-Path $PSScriptRoot "bin\clash.ps1"
-    Copy-Item -Force $source $TargetScript
+function Install-FromLocalProject($TargetExe) {
+    $candidates = @(
+        (Join-Path $PSScriptRoot "target\release\clash.exe"),
+        (Join-Path $PSScriptRoot "target\debug\clash.exe"),
+        (Join-Path $PSScriptRoot "bin\clash-x86_64-pc-windows-msvc.exe")
+    )
+
+    foreach ($source in $candidates) {
+        if (Test-Path $source) {
+            Copy-Item -Force $source $TargetExe
+            return
+        }
+    }
+
+    throw "本地未找到 clash.exe，请先执行: cargo build --release"
 }
 
-function Install-FromRemote($TargetScript) {
-    $url = "$RawBaseUrl/bin/clash.ps1"
-    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $TargetScript
+function Install-FromRemote($TargetExe) {
+    $url = "$RawBaseUrl/bin/clash-x86_64-pc-windows-msvc.exe"
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $TargetExe
 }
 
-function Write-CmdShim($TargetScript, $ShimPath) {
+function Write-CmdShim($TargetExe, $ShimPath) {
     $content = @(
         "@echo off"
-        "pwsh -NoProfile -ExecutionPolicy Bypass -File `"$TargetScript`" %*"
+        "`"$TargetExe`" %*"
     )
     Set-Content -Path $ShimPath -Value $content -Encoding ASCII
 }
@@ -60,20 +72,20 @@ function Ensure-UserPath($Directory) {
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-$targetScript = Join-Path $InstallDir "clash.ps1"
+$targetExe = Join-Path $InstallDir "clash.exe"
 $shimPath = Join-Path $InstallDir "clash.cmd"
-$localSource = Join-Path $PSScriptRoot "bin\clash.ps1"
+$localSource = Join-Path $PSScriptRoot "Cargo.toml"
 
 if (Test-Path $localSource) {
     Write-Info "使用本地项目安装 clash"
-    Install-FromLocalProject $targetScript
+    Install-FromLocalProject $targetExe
 }
 else {
     Write-Info "从远程地址安装 clash"
-    Install-FromRemote $targetScript
+    Install-FromRemote $targetExe
 }
 
-Write-CmdShim $targetScript $shimPath
+Write-CmdShim $targetExe $shimPath
 Ensure-UserPath $InstallDir
 
 Write-Ok "clash 已安装到 $InstallDir"

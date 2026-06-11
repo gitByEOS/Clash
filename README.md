@@ -32,7 +32,7 @@ VS Code 为例：
 | 平台            | 实现                      | 安装方式          |
 | ------------- | ----------------------- | ------------- |
 | macOS / Linux | Rust 原生二进制              | `install.sh`  |
-| Windows       | PowerShell 脚本（需 `pwsh`） | `install.ps1` |
+| Windows       | Rust 原生 `clash.exe`      | `install.ps1` |
 
 
 ## 安装
@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/gitByEOS/Clash/master/install.sh | 
 
 ### Windows
 
-默认安装到 `%LOCALAPPDATA%\Programs\clash\`，并写入 `clash.cmd` 到用户 PATH。
+默认安装到 `%LOCALAPPDATA%\Programs\clash\`，并写入 `clash.exe` / `clash.cmd` 到用户 PATH。
 
 远程一键安装：
 
@@ -74,7 +74,7 @@ clash config --models model-a,model-b
 clash config --idx 1 --url https://api.other.com/anthropic
 ```
 
-macOS / Linux 原生二进制支持多账户配置槽：`--idx 0` 写入 `auth`，`--idx 1` 写入 `auth1`，以此类推。`clash run` 会读取所有账户并合并模型列表。
+Rust 版支持多账户配置槽：`--idx 0` 写入 `auth`，`--idx 1` 写入 `auth1`，以此类推。`clash run` 会读取所有账户并合并模型列表。
 
 写入配置后会自动对该账户的 `MODELS` 列表逐个执行连通测试（等同 `clash test --idx n`）。跳过：`CLASH_SKIP_AUTO_TEST=1`。
 
@@ -91,6 +91,8 @@ clash reset                   # 删除全部账户配置
 clash test                    # 测试所有账户的所有模型（默认）
 clash test --idx 1            # 只测 idx1 的 MODELS
 clash test --idx 1 --model m  # 只测 idx1 的单个模型
+clash prompt                  # 捕获 Claude Code 请求，生成并打开 HTML 报告
+clash prompt --json           # 打印完整请求信息 JSON
 clash rename                  # 交互式修改账户别名
 ```
 
@@ -103,17 +105,6 @@ macOS / Linux：
 ~/.config/clash/auth1
 ~/.config/clash/auth2
 ```
-
-Windows：
-
-```text
-%APPDATA%\clash\auth
-```
-
-## 凭据存储
-
-- **macOS / Linux**：`AUTH_TOKEN` 使用本机 hostname + 用户名派生密钥 AES 加密
-- **Windows**：`AUTH_TOKEN` 使用 DPAPI 加密
 
 ## 文档
 

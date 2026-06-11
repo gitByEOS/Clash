@@ -1,3 +1,4 @@
+use crate::model::remove_size_marker;
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -145,31 +146,6 @@ fn build_bar(pct: u64, width: usize) -> String {
     )
 }
 
-fn remove_size_marker(name: &str) -> String {
-    let mut result = name.to_string();
-    let mut i = 0;
-    let chars = name.chars().collect::<Vec<_>>();
-    while i < chars.len() {
-        if chars[i] == '[' {
-            let mut j = i + 1;
-            let mut is_size = true;
-            while j < chars.len() && chars[j] != ']' {
-                let c = chars[j];
-                if !(c.is_ascii_digit() || c == 'k' || c == 'm') {
-                    is_size = false;
-                }
-                j += 1;
-            }
-            if j < chars.len() && chars[j] == ']' && is_size {
-                let marker = &name[i..=j];
-                result = result.replace(marker, "");
-            }
-        }
-        i += 1;
-    }
-    result
-}
-
 fn format_duration(secs: i64) -> String {
     if secs < 0 {
         return "0s".to_string();
@@ -252,11 +228,18 @@ pub(crate) fn do_statusline() {
 
     println!(
         "{}[{}]{} {} {}{}%{} - {}{} \x1b[90m|{} {}Clash{}{}",
-        blue, model_name, reset,
+        blue,
+        model_name,
+        reset,
         bar,
-        pct_color, pct, reset,
-        blue, size_str, reset,
-        orange, reset,
+        pct_color,
+        pct,
+        reset,
+        blue,
+        size_str,
+        reset,
+        orange,
+        reset,
         duration_str
     );
 }
