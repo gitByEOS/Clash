@@ -1,6 +1,7 @@
+use crate::cli::parse_auth_args;
 use crate::config;
 use crate::crypto;
-use crate::cli::parse_auth_args;
+use crate::model::remove_size_marker;
 use std::io;
 use std::process::{Command, Stdio};
 
@@ -9,7 +10,7 @@ const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.118 (external, cli)";
 
 /// `clash test` 可选参数
 pub struct TestOptions {
-    pub idx: Option<usize>,  // None means test all accounts
+    pub idx: Option<usize>, // None means test all accounts
     pub base_url: Option<String>,
     pub auth_key: Option<String>,
     pub model: Option<String>,
@@ -23,7 +24,11 @@ pub struct ModelProbeResult {
 }
 
 pub fn parse_test_args(args: &[String]) -> Result<TestOptions, ()> {
-    let map = parse_auth_args(args, &["--idx", "--url", "--key", "--model", "--all"], false)?;
+    let map = parse_auth_args(
+        args,
+        &["--idx", "--url", "--key", "--model", "--all"],
+        false,
+    )?;
     let has_all = map.contains_key("--all");
     let idx = map
         .get("--idx")
@@ -78,12 +83,12 @@ fn probe_body(model: &str, base_url: &str) -> String {
 
 fn resolve_models(opts: &TestOptions, cfg: &config::ClashConfig) -> Result<Vec<String>, String> {
     if let Some(model) = opts.model.as_ref().filter(|s| !s.is_empty()) {
-        return Ok(vec![model.clone()]);
+        return Ok(vec![remove_size_marker(model)]);
     }
     if cfg.models.is_empty() {
         return Err("缺少模型，请配置 MODELS 或使用 --model".to_string());
     }
-    Ok(cfg.models.clone())
+    Ok(cfg.models.iter().map(|m| remove_size_marker(m)).collect())
 }
 
 /// 连通测试所需上下文
@@ -240,6 +245,27 @@ mod tests {
             model: None,
         };
         assert_eq!(resolve_models(&opts, &cfg).unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn resolve_models_strips_size_marker() {
+        let cfg = config::ClashConfig {
+            base_url: String::new(),
+            auth_token_encrypted: String::new(),
+            command: "clash".to_string(),
+            models: vec!["qwen3.7-plus[1m]".into(), "glm-5".into()],
+            name: None,
+        };
+        let opts = TestOptions {
+            idx: Some(0),
+            base_url: None,
+            auth_key: None,
+            model: None,
+        };
+        assert_eq!(
+            resolve_models(&opts, &cfg).unwrap(),
+            vec!["qwen3.7-plus", "glm-5"]
+        );
     }
 
     #[test]

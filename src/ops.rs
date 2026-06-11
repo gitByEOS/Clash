@@ -1,8 +1,9 @@
 use crate::api_test;
 use crate::claude;
-use crate::cli::{ConfigSetArgs, print_red, print_green, print_yellow, print_cyan};
+use crate::cli::{print_cyan, print_green, print_red, print_yellow, ConfigSetArgs};
 use crate::config::{self, ClashConfig, ConfigSlot};
 use crate::crypto;
+use crate::prompt_capture;
 use crate::statusline;
 use crate::tui;
 use std::env;
@@ -267,7 +268,32 @@ fn do_config_show(idx: usize) -> Result<(), ()> {
 
 pub fn do_reset(_print_red: fn(&str), _print_green: fn(&str)) -> Result<(), ()> {
     config::delete_all_configs().map_err(|_| ())?;
-    print_green(&format!("已删除全部配置 {}", config::config_dir().display()));
+    print_green(&format!(
+        "已删除全部配置 {}",
+        config::config_dir().display()
+    ));
+    Ok(())
+}
+
+// ── prompt ───────────────────────────────────────────────────
+
+pub fn do_prompt(args: &[String], _print_red: fn(&str), _print_green: fn(&str)) -> Result<(), ()> {
+    let output = prompt_capture::parse_prompt_output(args).map_err(|msg| {
+        print_red(&msg);
+    })?;
+    let capture = prompt_capture::capture_claude_prompt(print_red)?;
+    match output {
+        prompt_capture::PromptOutput::HtmlOpen => {
+            let path = prompt_capture::write_html_report(&capture).map_err(|msg| {
+                print_red(&msg);
+            })?;
+            prompt_capture::open_html_report(&path).map_err(|msg| {
+                print_red(&msg);
+            })?;
+            print_green(&format!("HTML 报告已打开: {}", path.display()));
+        }
+        _ => prompt_capture::print_capture(&capture, output),
+    }
     Ok(())
 }
 
@@ -313,14 +339,21 @@ pub fn do_rename(
     std::io::stdout().flush().unwrap();
     std::io::stdin().read_line(&mut buf).unwrap();
     let new_name = buf.trim().to_string();
-    let name_opt = if new_name.is_empty() { None } else { Some(new_name) };
+    let name_opt = if new_name.is_empty() {
+        None
+    } else {
+        Some(new_name)
+    };
 
     let mut cfg = slot.config.clone();
     cfg.name = name_opt;
 
     config::write_config_for_idx(slot.idx, &cfg).map_err(|_| ())?;
 
-    let new_label = cfg.name.clone().unwrap_or_else(|| format!("{}st", slot.idx + 1));
+    let new_label = cfg
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("{}st", slot.idx + 1));
     print_green(&format!("账户已重命名为: {}", new_label));
 
     Ok(())
@@ -450,7 +483,11 @@ pub fn do_test(
     for &idx in &test_indices {
         print_cyan(&format!(
             "=== 测试账户 [{}] ===",
-            slots.iter().find(|s| s.idx == idx).map(account_label).unwrap_or_else(|| format!("{}st", idx + 1))
+            slots
+                .iter()
+                .find(|s| s.idx == idx)
+                .map(account_label)
+                .unwrap_or_else(|| format!("{}st", idx + 1))
         ));
         flush_stdout();
 
@@ -467,7 +504,10 @@ pub fn do_test(
     }
 
     if test_indices.len() > 1 {
-        print_cyan(&format!("=== 总结: {} 通过, {} 失败 ===", total_passed, total_failed));
+        print_cyan(&format!(
+            "=== 总结: {} 通过, {} 失败 ===",
+            total_passed, total_failed
+        ));
     }
 
     if total_failed > 0 {
@@ -590,9 +630,7 @@ pub fn do_select_and_run(
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let err = process::Command::new(&claude_path)
-            .args(&cmd_args)
-            .exec();
+        let err = process::Command::new(&claude_path).args(&cmd_args).exec();
         print_red(&format!("exec claude 失败: {}", err));
         process::exit(127);
     }

@@ -73,9 +73,7 @@ fn check_claude_outdated() -> Option<String> {
 }
 
 fn get_claude_version() -> Option<String> {
-    let output = process::Command::new("claude")
-        .arg("--version")
-        .output();
+    let output = process::Command::new("claude").arg("--version").output();
 
     match output {
         Ok(o) => {
@@ -83,15 +81,16 @@ fn get_claude_version() -> Option<String> {
             // 输出格式: "2.1.166 (Claude Code)" 或 "v2.1.166"
             for line in stdout.lines() {
                 // 尝试匹配 v 开头的版本
-                if let Some(v) = line.split_whitespace()
-                    .find(|s| s.starts_with('v'))
-                {
+                if let Some(v) = line.split_whitespace().find(|s| s.starts_with('v')) {
                     return Some(v[1..].to_string()); // 去掉 v
                 }
                 // 尝试匹配纯数字版本 (如 "2.1.166")
-                if let Some(v) = line.split_whitespace()
-                    .find(|s| s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
-                {
+                if let Some(v) = line.split_whitespace().find(|s| {
+                    s.chars()
+                        .next()
+                        .map(|c| c.is_ascii_digit())
+                        .unwrap_or(false)
+                }) {
                     return Some(v.to_string());
                 }
             }
@@ -105,10 +104,7 @@ fn prompt_update_choice(current: &str, latest: &str) -> Option<bool> {
     // Some(true) = 更新, Some(false) = 忽略, None = 取消
     print_cyan(&format!("Claude Code 有新版本: {} -> {}", current, latest));
 
-    let options = vec![
-        format!("更新到 {}", latest),
-        "忽略此版本".to_string(),
-    ];
+    let options = vec![format!("更新到 {}", latest), "忽略此版本".to_string()];
 
     let title = "Claude Code 更新";
     let selected = tui::select_item(&options, title);
@@ -192,7 +188,10 @@ fn run_npm_install() -> Result<(), ()> {
 
     let status = if cfg!(windows) {
         process::Command::new("cmd")
-            .args(["/C", "npm install -g @anthropic-ai/claude-code@latest --silent"])
+            .args([
+                "/C",
+                "npm install -g @anthropic-ai/claude-code@latest --silent",
+            ])
             .status()
     } else {
         process::Command::new("sh")
@@ -207,7 +206,9 @@ fn run_npm_install() -> Result<(), ()> {
             Ok(())
         }
         Ok(_) => {
-            print_red("npm install 失败，请手动执行: npm install -g @anthropic-ai/claude-code@latest");
+            print_red(
+                "npm install 失败，请手动执行: npm install -g @anthropic-ai/claude-code@latest",
+            );
             Err(())
         }
         Err(_) => {

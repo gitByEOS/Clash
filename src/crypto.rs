@@ -5,7 +5,6 @@ use rand::RngCore;
 use sha2::Sha256;
 use std::env;
 
-
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
@@ -106,7 +105,9 @@ pub fn encrypt_token(plaintext: &str) -> Result<String, CryptoError> {
 
 /// Decrypt a token encrypted with `openssl enc -aes-256-cbc -base64 -A -pass pass:... -pbkdf2`
 pub fn decrypt_token(encoded: &str) -> Result<String, CryptoError> {
-    let data = STANDARD.decode(encoded).map_err(|_| CryptoError::Base64Decode)?;
+    let data = STANDARD
+        .decode(encoded)
+        .map_err(|_| CryptoError::Base64Decode)?;
 
     // Verify "Salted__" magic
     if data.len() < SALT_MAGIC.len() + SALT_LEN || &data[..SALT_MAGIC.len()] != SALT_MAGIC {

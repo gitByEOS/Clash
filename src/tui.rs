@@ -3,9 +3,7 @@ use crossterm::{
     cursor::{MoveToColumn, MoveUp, RestorePosition, SavePosition, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    style::{
-        Attribute, Color, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
-    },
+    style::{Attribute, Color, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{self, size, Clear, ClearType},
     tty::IsTty,
 };
@@ -417,7 +415,7 @@ fn render(out: &mut impl Write, state: &mut State) {
             i == sel,
             frame_width,
             theme,
-            i + 1,  // 数字索引
+            i + 1, // 数字索引
         );
         line_count += 1;
     }
@@ -466,7 +464,10 @@ fn render_info(
         SetForegroundColor(theme.dim)
     );
     let _ = write!(out, " ");
-    draw_rule(out, frame_width.saturating_sub(count_width).saturating_sub(1));
+    draw_rule(
+        out,
+        frame_width.saturating_sub(count_width).saturating_sub(1),
+    );
     reset_style(out);
     finish_line(out);
 }
@@ -490,7 +491,7 @@ fn render_row(
     index: usize,
 ) {
     begin_line(out);
-    let prefix = format!("{}. ", index);  // "1. " "2. "
+    let prefix = format!("{}. ", index); // "1. " "2. "
     let used = MARKER_END_COL as usize + display_width(&prefix);
     let item_width = width.saturating_sub(used);
 

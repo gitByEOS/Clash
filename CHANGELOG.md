@@ -1,5 +1,11 @@
 # ChangeLog
 
+## v0.1.5
+
+- Rust 版新增 `clash prompt` 捕获 Claude Code 实际请求提示词
+- `clash prompt` 报告补齐本地规则、Skills 和延迟工具信息
+- Windows 改为发布 Rust `clash.exe`，废弃 PowerShell 业务实现
+
 ## v0.1.4
 
 - 支持追加系统提示词

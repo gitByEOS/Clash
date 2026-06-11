@@ -1,4 +1,6 @@
-use crate::ops::{do_select_and_run, do_version, do_update, do_config, do_reset, do_test, do_rename};
+use crate::ops::{
+    do_config, do_prompt, do_rename, do_reset, do_select_and_run, do_test, do_update, do_version,
+};
 use crate::statusline;
 use std::collections::HashMap;
 use std::env;
@@ -50,7 +52,11 @@ pub struct ConfigSetArgs {
 
 /// 通用参数解析：遍历 args，遇 --xxx 取下一元素为值
 #[allow(clippy::result_unit_err)]
-pub fn parse_auth_args(args: &[String], flags: &[&str], verbose: bool) -> Result<HashMap<String, String>, ()> {
+pub fn parse_auth_args(
+    args: &[String],
+    flags: &[&str],
+    verbose: bool,
+) -> Result<HashMap<String, String>, ()> {
     let mut result = HashMap::new();
     let mut i = 0;
 
@@ -107,19 +113,57 @@ pub fn launch() {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if args.is_empty() {
-        exit_on_err(do_select_and_run(&[], print_red, print_green, print_yellow, print_cyan));
+        exit_on_err(do_select_and_run(
+            &[],
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+        ));
         return;
     }
 
     match args[0].as_str() {
         "version" => do_version(APP_VERSION),
-        "update" => exit_on_err(do_update(APP_VERSION, DEFAULT_RAW_BASE_URL, print_red, print_green, print_cyan)),
+        "update" => exit_on_err(do_update(
+            APP_VERSION,
+            DEFAULT_RAW_BASE_URL,
+            print_red,
+            print_green,
+            print_cyan,
+        )),
         "statusline" => statusline::do_statusline(),
-        "run" => exit_on_err(do_select_and_run(&args[1..], print_red, print_green, print_yellow, print_cyan)),
-        "config" => exit_on_err(do_config(&args[1..], print_red, print_green, print_yellow, print_cyan, parse_config_set_args)),
+        "run" => exit_on_err(do_select_and_run(
+            &args[1..],
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+        )),
+        "config" => exit_on_err(do_config(
+            &args[1..],
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+            parse_config_set_args,
+        )),
         "reset" => exit_on_err(do_reset(print_red, print_green)),
-        "test" => exit_on_err(do_test(&args[1..], print_red, print_green, print_yellow, print_cyan)),
+        "test" => exit_on_err(do_test(
+            &args[1..],
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+        )),
+        "prompt" => exit_on_err(do_prompt(&args[1..], print_red, print_green)),
         "rename" => exit_on_err(do_rename(print_red, print_green, print_yellow, print_cyan)),
-        _ => exit_on_err(do_select_and_run(&args, print_red, print_green, print_yellow, print_cyan)),
+        _ => exit_on_err(do_select_and_run(
+            &args,
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+        )),
     }
 }
