@@ -1,5 +1,11 @@
 # ChangeLog
 
+## v0.2.0
+
+- 新增 `clash lark` 飞书群组监听
+- 支持 管理群创建会话群组
+- 支持 Claude 回复流式卡片展示
+
 ## v0.1.5
 
 - Rust 版新增 `clash prompt` 捕获 Claude Code 实际请求提示词
@@ -29,3 +35,4 @@
 ## v0.1.0
 
 - 初始可安装版本
+

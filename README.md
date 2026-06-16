@@ -94,6 +94,7 @@ clash test --idx 1 --model m  # 只测 idx1 的单个模型
 clash prompt                  # 捕获 Claude Code 请求，生成并打开 HTML 报告
 clash prompt --json           # 打印完整请求信息 JSON
 clash rename                  # 交互式修改账户别名
+clash lark                    # 监听 Clash-GroupManager；发「新会话 名称」创建会话，流式卡片回复
 ```
 
 ## 配置路径
