@@ -3,6 +3,7 @@ use crate::claude;
 use crate::cli::{print_cyan, print_green, print_red, print_yellow, ConfigSetArgs};
 use crate::config::{self, ClashConfig, ConfigSlot};
 use crate::crypto;
+use crate::hooks;
 use crate::prompt_capture;
 use crate::statusline;
 use crate::tui;
@@ -273,6 +274,12 @@ pub fn do_reset(_print_red: fn(&str), _print_green: fn(&str)) -> Result<(), ()> 
         config::config_dir().display()
     ));
     Ok(())
+}
+
+// ── hooks ───────────────────────────────────────────────────
+
+pub fn do_hooks() -> Result<(), ()> {
+    hooks::do_hooks()
 }
 
 // ── prompt ───────────────────────────────────────────────────

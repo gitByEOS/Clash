@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod crypto;
 mod fuzzy;
+mod hooks;
 mod lark;
 mod model;
 mod ops;

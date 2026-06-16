@@ -156,3 +156,138 @@ strings "$(command -v claude)" | sort -u
 | `update` / `upgrade`   | 检查并安装更新                                   |
 
 
+## Hooks 类型
+
+Claude Code 支持 27 种 Hook 事件，按分类整理如下：
+
+### 工具相关
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `PreToolUse` | 工具调用前执行，可阻止操作 |
+| `PostToolUse` | 工具调用后执行，可处理结果 |
+| `PermissionRequest` | 权限请求时执行 |
+| `PermissionDenied` | 权限被拒绝时执行 |
+
+### 会话生命周期
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `SessionStart` | 会话开始时执行 |
+| `SessionEnd` | 会话结束时执行 |
+| `Stop` | 会话停止时执行 |
+| `StopFailure` | API 错误导致停止时执行 |
+| `Setup` | 通过 `--init/--maintenance` 触发 |
+
+### 子代理相关
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `SubagentStart` | 子代理启动时执行 |
+| `SubagentStop` | 子代理停止时执行 |
+| `TeammateIdle` | 队友进入空闲状态时执行 |
+| `TaskCreated` | 任务创建时执行 |
+| `TaskCompleted` | 任务完成时执行 |
+
+### 消息相关
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `MessageDisplay` | 消息显示时可转换/隐藏内容 |
+| `UserPromptSubmit` | 用户提交提示词时执行 |
+| `Notification` | 通知事件触发时执行 |
+
+### 文件/环境相关
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `FileChanged` | 文件变更时执行 |
+| `CwdChanged` | 工作目录变更时执行 |
+| `InstructionsLoaded` | `CLAUDE.md/rules` 加载时执行 |
+| `ConfigChange` | 配置文件变更时执行 |
+
+### Git Worktree
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `WorktreeCreate` | 创建 worktree 时执行 |
+| `WorktreeRemove` | 删除 worktree 时执行 |
+
+### 压缩相关
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `PreCompact` | 上下文压缩前执行 |
+| `PostCompact` | 上下文压缩后执行 |
+
+### 交互相关
+
+| Hook 类型 | 说明 |
+|-----------|------|
+| `Elicitation` | 用户交互请求时执行 |
+| `ElicitationResult` | 用户交互结果时执行 |
+
+### 配置示例
+
+在 `~/.claude/settings.json` 中配置：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "echo 'Pre Bash'" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "echo 'Session started'" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Hook Type 类型
+
+| type | 说明 | 适用事件 | 配置字段 |
+|------|------|---------|---------|
+| `command` | 执行命令 | 全部 | `command` |
+| `prompt` | 提示词判断 | Stop, SubagentStop | `prompt`, `model` |
+| `agent` | 代理判断 | Stop, SubagentStop | `agent`, `model` |
+| `mcp_tool` | MCP 工具调用 | 全部 | `mcp_tool`, `arguments` |
+| `http` | HTTP 请求 | 全部 | `url`, `method`, `headers`, `body` |
+
+**command 类型示例**：
+```json
+{ "type": "command", "command": "/path/to/script.sh" }
+```
+
+**prompt 类型示例** (仅 Stop/SubagentStop)：
+```json
+{ "type": "prompt", "prompt": "检查是否有未提交的代码", "model": "claude-sonnet-4-20250514" }
+```
+
+**agent 类型示例** (仅 Stop/SubagentStop)：
+```json
+{ "type": "agent", "agent": "code-reviewer", "model": "claude-sonnet-4-20250514" }
+```
+
+**mcp_tool 类型示例**：
+```json
+{ "type": "mcp_tool", "mcp_tool": "mcp__slack__send_message", "arguments": { "channel": "#alerts", "text": "Hook triggered" } }
+```
+
+**http 类型示例**：
+```json
+{ "type": "http", "url": "https://api.example.com/hook", "method": "POST", "headers": { "Authorization": "Bearer token" }, "body": "{\"event\": \"PreToolUse\"}" }
+```
+
+使用 `clash hooks` 命令打开浏览器可视化编辑。
+
+
