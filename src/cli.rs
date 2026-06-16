@@ -1,3 +1,4 @@
+use crate::lark;
 use crate::ops::{
     do_config, do_prompt, do_rename, do_reset, do_select_and_run, do_test, do_update, do_version,
 };
@@ -156,6 +157,7 @@ pub fn launch() {
             print_yellow,
             print_cyan,
         )),
+        "lark" => exit_on_err(lark::do_lark(&args[1..])),
         "prompt" => exit_on_err(do_prompt(&args[1..], print_red, print_green)),
         "rename" => exit_on_err(do_rename(print_red, print_green, print_yellow, print_cyan)),
         _ => exit_on_err(do_select_and_run(

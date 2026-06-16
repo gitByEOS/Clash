@@ -867,14 +867,14 @@ fn html_escape(text: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn json_number<'a>(body: Option<&'a Value>, key: &str) -> String {
+fn json_number(body: Option<&Value>, key: &str) -> String {
     body.and_then(|body| body.get(key))
         .and_then(Value::as_i64)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string())
 }
 
-fn json_bool<'a>(body: Option<&'a Value>, key: &str) -> String {
+fn json_bool(body: Option<&Value>, key: &str) -> String {
     body.and_then(|body| body.get(key))
         .and_then(Value::as_bool)
         .map(|value| value.to_string())
