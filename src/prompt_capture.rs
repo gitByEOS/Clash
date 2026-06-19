@@ -48,13 +48,13 @@ pub fn parse_prompt_output(args: &[String]) -> Result<PromptOutput, String> {
         return Ok(PromptOutput::HtmlOpen);
     }
     if args.len() > 1 {
-        return Err("用法: clash prompt [--json|--html]".to_string());
+        return Err("用法: clash prompts [--json|--html]".to_string());
     }
 
     match args[0].as_str() {
         "--json" => Ok(PromptOutput::Json),
         "--html" => Ok(PromptOutput::Html),
-        _ => Err("用法: clash prompt [--json|--html]".to_string()),
+        _ => Err("用法: clash prompts [--json|--html]".to_string()),
     }
 }
 
@@ -1151,17 +1151,30 @@ fn local_files_json(files: &[LocalFile]) -> Value {
 const HTML_STYLE: &str = r#"
 :root {
   color-scheme: light dark;
-  --bg: #0f172a;
-  --panel: #111827;
-  --panel-soft: #1f2937;
-  --text: #e5e7eb;
-  --muted: #9ca3af;
-  --border: #374151;
-  --accent: #60a5fa;
+  --bg: #1a1f2e;
+  --bg-deep: #141822;
+  --panel: #232a3b;
+  --panel-strong: #20273a;
+  --section: #171f30;
+  --section-strong: #151c2a;
+  --panel-soft: #283044;
+  --readable-card: #1f2937;
+  --readable-code: #020617;
+  --text: #c8d0e0;
+  --muted: #8895a8;
+  --border: #3a4560;
+  --border-soft: #2a3347;
+  --accent: #5a7aa0;
+  --accent-soft: #4a6588;
+  --accent-hover: #6a8ab8;
+  --strong: #60a5fa;
 }
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 16% 0%, rgba(90, 122, 160, 0.1), transparent 34%),
+    radial-gradient(circle at 82% 12%, rgba(74, 101, 136, 0.08), transparent 30%),
+    linear-gradient(180deg, #172033 0%, #141c2b 52%, var(--bg-deep) 100%);
   color: var(--text);
   font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -1180,9 +1193,10 @@ h1 {
 section {
   margin: 18px 0;
   padding: 20px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--section), var(--section-strong));
+  border: 1px solid var(--border-soft);
   border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(4, 8, 18, 0.2);
 }
 .grid {
   display: grid;
@@ -1192,7 +1206,7 @@ section {
 }
 .metric {
   padding: 12px;
-  background: var(--panel-soft);
+  background: var(--readable-card);
   border: 1px solid var(--border);
   border-radius: 10px;
   min-height: 72px;
@@ -1206,13 +1220,13 @@ section {
 .metric strong {
   display: block;
   margin-top: 4px;
-  color: var(--accent);
+  color: var(--strong);
   overflow-wrap: anywhere;
 }
 details {
   margin: 12px 0;
   padding: 12px;
-  background: var(--panel-soft);
+  background: var(--readable-card);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
@@ -1224,7 +1238,7 @@ pre {
   overflow: auto;
   max-height: 720px;
   padding: 14px;
-  background: #020617;
+  background: var(--readable-code);
   border: 1px solid var(--border);
   border-radius: 10px;
   white-space: pre-wrap;
@@ -1243,7 +1257,7 @@ pre {
   width: 100%;
   height: 360px;
   padding: 14px;
-  background: var(--panel-soft);
+  background: var(--readable-card);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1251,20 +1265,20 @@ pre {
   cursor: pointer;
 }
 .card:hover {
-  border-color: var(--accent);
+  border-color: var(--strong);
 }
 .card-kind {
   margin-bottom: 10px;
   padding: 2px 8px;
-  color: #bfdbfe;
-  background: #1e3a8a;
+  color: #dbe7f6;
+  background: rgba(74, 101, 136, 0.52);
   border-radius: 999px;
   font-size: 12px;
 }
 .card strong {
   display: block;
   margin-bottom: 10px;
-  color: var(--accent);
+  color: var(--strong);
   font-size: 16px;
 }
 .card p {
@@ -1278,8 +1292,8 @@ pre {
 .pill {
   margin-left: 8px;
   padding: 2px 8px;
-  color: #bfdbfe;
-  background: #1e3a8a;
+  color: #dbe7f6;
+  background: rgba(74, 101, 136, 0.52);
   border-radius: 999px;
   font-size: 12px;
 }
@@ -1310,7 +1324,7 @@ pre {
 }
 .drawer.open {
   pointer-events: auto;
-  background: rgba(2, 6, 23, 0.58);
+  background: rgba(10, 12, 18, 0.72);
 }
 .drawer-panel {
   position: absolute;
@@ -1320,8 +1334,8 @@ pre {
   height: 100%;
   padding: 24px;
   box-sizing: border-box;
-  background: var(--panel);
-  border-left: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
+  border-left: 1px solid var(--border-soft);
   transform: translateX(100%);
   transition: transform 220ms ease;
   overflow: auto;
@@ -1334,8 +1348,8 @@ pre {
   width: 36px;
   height: 36px;
   color: var(--text);
-  background: var(--panel-soft);
-  border: 1px solid var(--border);
+  background: rgba(40, 48, 68, 0.86);
+  border: 1px solid var(--border-soft);
   border-radius: 999px;
   cursor: pointer;
   font-size: 24px;

@@ -282,9 +282,9 @@ pub fn do_hooks() -> Result<(), ()> {
     hooks::do_hooks()
 }
 
-// ── prompt ───────────────────────────────────────────────────
+// ── prompts ───────────────────────────────────────────────────
 
-pub fn do_prompt(args: &[String], _print_red: fn(&str), _print_green: fn(&str)) -> Result<(), ()> {
+pub fn do_prompts(args: &[String], _print_red: fn(&str), _print_green: fn(&str)) -> Result<(), ()> {
     let output = prompt_capture::parse_prompt_output(args).map_err(|msg| {
         print_red(&msg);
     })?;

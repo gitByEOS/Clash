@@ -3,3 +3,5 @@
 !/e2e/artifacts/.gitkeep
 /e2e/__pycache__/
 .DS_Store
+.backup/
+.trash/
