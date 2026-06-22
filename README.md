@@ -26,6 +26,7 @@
 
 - `clash prompts`，查看 claude 提示词
 - `clash hooks`，打开浏览器编辑 hooks 配置
+- `clash debug`，通过 mock-ollama 代理调试 Claude Code 真实请求
 - `clash lark`，通过飞书指挥claude
 
 
@@ -98,12 +99,21 @@ clash reset                   # 删除全部账户配置
 clash test                    # 测试所有账户的所有模型（默认）
 clash test --idx 1            # 只测 idx1 的 MODELS
 clash test --idx 1 --model m  # 只测 idx1 的单个模型
+clash debug                   # 选模型后启动 Claude，并打开 mock-ollama 日志页
+clash debug --idx 1 --model m # 指定账户和模型启动 debug
+clash debug --port 11436      # 指定 mock-ollama 监听端口，默认 11435
 clash prompts                 # 捕获 Claude Code 请求，生成并打开 HTML 报告
 clash prompts --json          # 打印完整请求信息 JSON
 clash hooks                   # 打开浏览器编辑 hooks 配置
 clash rename                  # 交互式修改账户别名
 clash lark                    # 监听 Clash-GroupManager；发「新会话 名称」创建会话，流式卡片回复
 ```
+
+### clash debug 说明
+
+使用的是为另外一个开源项目[mock-ollama](https://github.com/gitByEOS/mock-ollama)，若本机没有，会自动执行 `npm install -g mock-ollama@latest`
+
+默认日志页面为 `http://localhost:11435`。代理 stdout / stderr 会写入 `~/.config/clash/debug/latest.log`
 
 ## 配置路径
 

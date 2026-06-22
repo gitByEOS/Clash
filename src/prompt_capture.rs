@@ -133,7 +133,6 @@ fn run_probe(claude_path: &str, base_url: &str) -> Result<Child, std::io::Error>
     let mut cmd = process::Command::new(claude_path);
     cmd.env("ANTHROPIC_BASE_URL", base_url)
         .env("ANTHROPIC_AUTH_TOKEN", "sk-clash-prompt-capture")
-        .env("ANTHROPIC_API_KEY", "sk-clash-prompt-capture")
         .env("ANTHROPIC_MODEL", CAPTURE_MODEL)
         .env("ANTHROPIC_SMALL_FAST_MODEL", CAPTURE_MODEL)
         .env("ANTHROPIC_DEFAULT_SONNET_MODEL", CAPTURE_MODEL)
@@ -144,7 +143,6 @@ fn run_probe(claude_path: &str, base_url: &str) -> Result<Child, std::io::Error>
         .env("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")
         .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
         .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
-        .env("CLAUDE_CODE_ENABLE_AUTO_MODE", "1")
         .arg("-p")
         .arg("ping")
         .arg("--permission-mode")

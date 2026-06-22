@@ -4,12 +4,18 @@ use crate::cli::{print_cyan, print_green, print_red, print_yellow, ConfigSetArgs
 use crate::config::{self, ClashConfig, ConfigSlot};
 use crate::crypto;
 use crate::hooks;
+use crate::model::remove_size_marker;
 use crate::prompt_capture;
 use crate::statusline;
 use crate::tui;
 use std::env;
+use std::fs::{self, File};
 use std::io::Write;
-use std::process;
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::process::{self, Child, Stdio};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct RunModelChoice {
     pub label: String,
@@ -304,6 +310,71 @@ pub fn do_prompts(args: &[String], _print_red: fn(&str), _print_green: fn(&str))
     Ok(())
 }
 
+// ── debug ───────────────────────────────────────────────────
+
+const DEBUG_DEFAULT_HOST: &str = "localhost";
+const DEBUG_DEFAULT_PORT: u16 = 11435;
+const MOCK_OLLAMA_CHECK_INTERVAL_SECS: u64 = 7 * 24 * 60 * 60;
+
+struct DebugArgs {
+    idx: Option<usize>,
+    model: Option<String>,
+    host: String,
+    port: u16,
+    claude_args: Vec<String>,
+}
+
+fn debug_usage() -> &'static str {
+    "用法: clash debug [--idx <编号>] [--model <模型>] [--host <地址>] [--port <端口>] [-- <claude 参数>]"
+}
+
+fn parse_debug_args(args: &[String]) -> Result<DebugArgs, String> {
+    let mut idx = None;
+    let mut model = None;
+    let mut host = DEBUG_DEFAULT_HOST.to_string();
+    let mut port = DEBUG_DEFAULT_PORT;
+    let mut claude_args = Vec::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--" {
+            claude_args.extend(args[i + 1..].iter().cloned());
+            break;
+        }
+        let value = args
+            .get(i + 1)
+            .ok_or_else(|| format!("{arg} 缺少值"))?
+            .clone();
+        match arg.as_str() {
+            "--idx" => {
+                idx = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| "--idx 必须是 0 或正整数".to_string())?,
+                )
+            }
+            "--model" => model = Some(value),
+            "--host" => host = value,
+            "--port" => {
+                port = value
+                    .parse::<u16>()
+                    .map_err(|_| "--port 必须是 1-65535".to_string())?
+            }
+            _ => return Err(debug_usage().to_string()),
+        }
+        i += 2;
+    }
+
+    Ok(DebugArgs {
+        idx,
+        model,
+        host,
+        port,
+        claude_args,
+    })
+}
+
 // ── rename ───────────────────────────────────────────────────
 
 pub fn do_rename(
@@ -568,6 +639,323 @@ fn load_run_choices() -> Result<Vec<RunModelChoice>, ()> {
     Ok(choices)
 }
 
+fn select_choice_from_list(choices: Vec<RunModelChoice>) -> Result<RunModelChoice, ()> {
+    let labels = choices
+        .iter()
+        .map(|choice| choice.label.clone())
+        .collect::<Vec<_>>();
+    let selected_label = tui::select_model(&labels).ok_or(())?;
+    choices
+        .into_iter()
+        .find(|choice| choice.label == selected_label)
+        .ok_or(())
+}
+
+fn select_run_choice() -> Result<RunModelChoice, ()> {
+    select_choice_from_list(load_run_choices()?)
+}
+
+fn select_debug_choice(args: &DebugArgs) -> Result<RunModelChoice, ()> {
+    if let Some(idx) = args.idx {
+        let config = config::read_config_for_idx(idx).map_err(|err| {
+            print_red(&format!("读取账户 idx={idx} 失败: {err}"));
+        })?;
+        if config.models.is_empty() {
+            print_red(&format!("账户 idx={idx} 未配置模型"));
+            return Err(());
+        }
+
+        let model = match &args.model {
+            Some(model) => model.clone(),
+            None if config.models.len() == 1 => config.models[0].clone(),
+            None => tui::select_model(&config.models).ok_or(())?,
+        };
+        let label = format!("[{}]  {}", idx, model);
+        return Ok(RunModelChoice {
+            label,
+            model,
+            config,
+        });
+    }
+
+    let choices = load_run_choices()?;
+    if let Some(model) = &args.model {
+        let normalized_model = remove_size_marker(model);
+        let matches = choices
+            .into_iter()
+            .filter(|choice| remove_size_marker(&choice.model) == normalized_model)
+            .collect::<Vec<_>>();
+        return match matches.len() {
+            0 => {
+                print_red(&format!("未找到模型: {model}"));
+                Err(())
+            }
+            1 => Ok(matches.into_iter().next().unwrap()),
+            _ => select_choice_from_list(matches),
+        };
+    }
+
+    select_choice_from_list(choices)
+}
+
+fn set_claude_env(base_url: &str, auth_token: &str, model: &str) {
+    env::set_var("ANTHROPIC_BASE_URL", base_url);
+    env::set_var("ANTHROPIC_AUTH_TOKEN", auth_token);
+    env::set_var("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+    env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1");
+    env::set_var("CLAUDE_CODE_ATTRIBUTION_HEADER", "0");
+    env::set_var("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
+    env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", model);
+    env::set_var("ANTHROPIC_MODEL", model);
+    env::set_var("ANTHROPIC_SMALL_FAST_MODEL", model);
+    env::set_var("ANTHROPIC_DEFAULT_SONNET_MODEL", model);
+    env::set_var("ANTHROPIC_DEFAULT_OPUS_MODEL", model);
+    env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", model);
+}
+
+fn claude_args(model: &str, extra_args: &[String]) -> Vec<String> {
+    let system_prompt = config::read_system_prompt();
+    let mut cmd_args: Vec<String> = vec![
+        "--permission-mode".to_string(),
+        "bypassPermissions".to_string(),
+        "--effort".to_string(),
+        "max".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+    ];
+
+    if system_prompt.is_some() {
+        cmd_args.push("--append-system-prompt-file".to_string());
+        cmd_args.push(config::system_prompt_path().to_string_lossy().to_string());
+    }
+
+    cmd_args.extend(extra_args.iter().cloned());
+    cmd_args
+}
+
+fn debug_dir() -> PathBuf {
+    config::config_dir().join("debug")
+}
+
+fn debug_log_path() -> PathBuf {
+    debug_dir().join("latest.log")
+}
+
+fn debug_app_config_path() -> PathBuf {
+    debug_dir().join("app_config")
+}
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn read_mock_ollama_last_check_ts() -> Option<u64> {
+    let content = fs::read_to_string(debug_app_config_path()).ok()?;
+    content.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        if key.trim() == "mock_ollama_last_check_ts" {
+            value.trim().parse::<u64>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+fn write_mock_ollama_last_check_ts(ts: u64) {
+    let dir = debug_dir();
+    let _ = fs::create_dir_all(&dir);
+    let content = format!("mock_ollama_last_check_ts={ts}\n");
+    let _ = fs::write(debug_app_config_path(), content);
+}
+
+fn is_mock_ollama_installed() -> bool {
+    process::Command::new("mock-ollama")
+        .arg("-h")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn install_mock_ollama() -> Result<(), ()> {
+    print_cyan("正在安装 mock-ollama@latest ...");
+    let status = process::Command::new("npm")
+        .args(["install", "-g", "mock-ollama@latest"])
+        .status()
+        .map_err(|err| {
+            print_red(&format!("无法执行 npm: {err}"));
+        })?;
+    if status.success() {
+        print_green("mock-ollama 安装完成");
+        Ok(())
+    } else {
+        print_red("mock-ollama 安装失败，请手动执行: npm install -g mock-ollama@latest");
+        Err(())
+    }
+}
+
+fn maybe_install_mock_ollama() -> Result<(), ()> {
+    if is_mock_ollama_installed() {
+        return Ok(());
+    }
+    install_mock_ollama()
+}
+
+fn maybe_update_mock_ollama() {
+    let now = unix_now_secs();
+    if read_mock_ollama_last_check_ts()
+        .map(|last| now.saturating_sub(last) < MOCK_OLLAMA_CHECK_INTERVAL_SECS)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    write_mock_ollama_last_check_ts(now);
+
+    let output = match process::Command::new("npm")
+        .args(["-g", "outdated", "mock-ollama", "--json"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            print_yellow(&format!("mock-ollama 更新检查失败: {err}"));
+            return;
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() && stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        if !detail.is_empty() {
+            print_yellow(&format!("mock-ollama 更新检查失败: {detail}"));
+        }
+        return;
+    }
+    if stdout.trim().is_empty() || !stdout.contains("mock-ollama") {
+        return;
+    }
+    if install_mock_ollama().is_err() {
+        print_yellow("继续使用当前 mock-ollama");
+    }
+}
+
+fn prepare_debug_log_file() -> Result<File, ()> {
+    let dir = debug_dir();
+    fs::create_dir_all(&dir).map_err(|err| {
+        print_red(&format!("无法创建 debug 目录: {err}"));
+    })?;
+    File::create(debug_log_path()).map_err(|err| {
+        print_red(&format!("无法创建 debug 日志: {err}"));
+    })
+}
+
+fn spawn_mock_ollama(args: &DebugArgs, base_url: &str, auth_token: &str) -> Result<Child, ()> {
+    let log_file = prepare_debug_log_file()?;
+    let stderr = log_file.try_clone().map_err(|err| {
+        print_red(&format!("无法复制 debug 日志句柄: {err}"));
+    })?;
+
+    process::Command::new("mock-ollama")
+        .arg("--url")
+        .arg(base_url)
+        .arg("--apikey")
+        .arg(auth_token)
+        .arg("--host")
+        .arg(&args.host)
+        .arg("--port")
+        .arg(args.port.to_string())
+        .arg("--api-style")
+        .arg("anthropic")
+        .arg("--open")
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .map_err(|err| {
+            print_red(&format!("无法启动 mock-ollama: {err}"));
+        })
+}
+
+fn wait_for_mock_ollama(child: &mut Child, host: &str, port: u16) -> Result<(), ()> {
+    let addr = format!("{host}:{port}");
+    for _ in 0..100 {
+        if let Ok(Some(status)) = child.try_wait() {
+            print_red(&format!("mock-ollama 已退出: {status}"));
+            print_yellow(&format!("查看日志: {}", debug_log_path().display()));
+            return Err(());
+        }
+        if TcpStream::connect(&addr).is_ok() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    print_red(&format!("mock-ollama 未在 10 秒内监听 {addr}"));
+    print_yellow(&format!("查看日志: {}", debug_log_path().display()));
+    Err(())
+}
+
+fn stop_mock_ollama(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+pub fn do_debug(
+    args: &[String],
+    _print_red: fn(&str),
+    _print_green: fn(&str),
+    _print_yellow: fn(&str),
+    _print_cyan: fn(&str),
+) -> Result<(), ()> {
+    statusline::ensure_statusline_config();
+
+    let debug_args = parse_debug_args(args).map_err(|msg| {
+        print_red(&msg);
+    })?;
+
+    let choice = select_debug_choice(&debug_args)?;
+    let auth_token = crypto::decrypt_token(&choice.config.auth_token_encrypted).map_err(|_| {
+        print_red("无法解密 API Key");
+    })?;
+    let model = remove_size_marker(&choice.model);
+
+    maybe_install_mock_ollama()?;
+    maybe_update_mock_ollama();
+
+    let mut mock = spawn_mock_ollama(&debug_args, &choice.config.base_url, &auth_token)?;
+    if wait_for_mock_ollama(&mut mock, &debug_args.host, debug_args.port).is_err() {
+        stop_mock_ollama(&mut mock);
+        return Err(());
+    }
+
+    let local_base_url = format!("http://{}:{}", debug_args.host, debug_args.port);
+    print_green(&format!("debug 代理已启动: {local_base_url}"));
+    print_cyan(&format!("日志: {}", debug_log_path().display()));
+
+    set_claude_env(&local_base_url, "sk-clash-debug", &model);
+    let claude_path = claude::find_claude_binary()?;
+    claude::maybe_check_update();
+    let cmd_args = claude_args(&model, &debug_args.claude_args);
+
+    let status = process::Command::new(&claude_path)
+        .args(&cmd_args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| {
+            stop_mock_ollama(&mut mock);
+            print_red(&format!("无法启动 claude: {err}"));
+        })?;
+
+    stop_mock_ollama(&mut mock);
+    process::exit(status.code().unwrap_or(1));
+}
+
 pub fn do_select_and_run(
     extra_args: &[String],
     _print_red: fn(&str),
@@ -577,62 +965,19 @@ pub fn do_select_and_run(
 ) -> Result<(), ()> {
     statusline::ensure_statusline_config();
 
-    let choices = load_run_choices()?;
-    let labels = choices
-        .iter()
-        .map(|choice| choice.label.clone())
-        .collect::<Vec<_>>();
-    let selected_label = tui::select_model(&labels).ok_or(())?;
-    let choice = choices
-        .into_iter()
-        .find(|choice| choice.label == selected_label)
-        .ok_or(())?;
-
+    let choice = select_run_choice()?;
     let auth_token = crypto::decrypt_token(&choice.config.auth_token_encrypted).map_err(|_| {
         print_red("无法解密 API Key");
     })?;
 
     let model = choice.model;
 
-    env::set_var("ANTHROPIC_BASE_URL", &choice.config.base_url);
-    env::set_var("ANTHROPIC_AUTH_TOKEN", &auth_token);
-    env::set_var("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
-    env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1");
-    env::set_var("CLAUDE_CODE_ATTRIBUTION_HEADER", "0");
-    env::set_var("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
-    env::set_var("CLAUDE_CODE_ENABLE_AUTO_MODE", "1");
-    env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", &model);
-    env::set_var("ANTHROPIC_MODEL", &model);
-    env::set_var("ANTHROPIC_SMALL_FAST_MODEL", &model);
-    env::set_var("ANTHROPIC_DEFAULT_SONNET_MODEL", &model);
-    env::set_var("ANTHROPIC_DEFAULT_OPUS_MODEL", &model);
-    env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", &model);
+    set_claude_env(&choice.config.base_url, &auth_token, &model);
 
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();
 
-    // 读取系统提示词（从 ~/.config/clash/system-prompt）
-    let system_prompt = config::read_system_prompt();
-
-    let mut cmd_args: Vec<String> = vec![
-        "--permission-mode".to_string(),
-        "bypassPermissions".to_string(),
-        "--effort".to_string(),
-        "max".to_string(),
-        "--model".to_string(),
-        model.clone(),
-    ];
-
-    // 追加系统提示词（使用文件方式传递多行内容）
-    if system_prompt.is_some() {
-        let sp_path = config::system_prompt_path();
-        cmd_args.push("--append-system-prompt-file".to_string());
-        cmd_args.push(sp_path.to_string_lossy().to_string());
-    }
-
-    for arg in extra_args {
-        cmd_args.push(arg.clone());
-    }
+    let cmd_args = claude_args(&model, extra_args);
 
     #[cfg(unix)]
     {

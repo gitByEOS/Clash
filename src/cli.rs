@@ -1,7 +1,7 @@
 use crate::lark;
 use crate::ops::{
-    do_config, do_hooks, do_prompts, do_rename, do_reset, do_select_and_run, do_test, do_update,
-    do_version,
+    do_config, do_debug, do_hooks, do_prompts, do_rename, do_reset, do_select_and_run, do_test,
+    do_update, do_version,
 };
 use crate::statusline;
 use std::collections::HashMap;
@@ -136,6 +136,13 @@ pub fn launch() {
         )),
         "statusline" => statusline::do_statusline(),
         "run" => exit_on_err(do_select_and_run(
+            &args[1..],
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+        )),
+        "debug" => exit_on_err(do_debug(
             &args[1..],
             print_red,
             print_green,

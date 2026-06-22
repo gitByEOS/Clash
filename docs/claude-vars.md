@@ -1,6 +1,6 @@
 # Claude Code 环境变量与 CLI 参数参考
 
-> 数据来源：本机 Claude Code `2.1.163` 的 `claude --help` 和 native binary 可见环境变量。
+> 数据来源：本机 Claude Code `2.1.185` 的 `claude --help` 和 native binary 可见环境变量。
 
 ## 如何更新
 
@@ -43,8 +43,9 @@ strings "$(command -v claude)" | sort -u
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`   | 禁用实验性 beta header     |
 | `CLAUDE_CODE_ATTRIBUTION_HEADER`           | 禁用 attribution header |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`     | 启用 Agent Teams        |
-| `CLAUDE_CODE_ENABLE_AUTO_MODE`             | 启用 auto 模式            |
 
+
+> clash 使用 `--permission-mode bypassPermissions`，不启用 auto mode。
 
 ## 常见相关变量
 
@@ -77,6 +78,7 @@ strings "$(command -v claude)" | sort -u
 | `CLAUDE_CODE_DISABLE_MOUSE`            | 禁用鼠标交互                   |
 | `CLAUDE_CODE_DISABLE_WORKFLOWS`        | 禁用 workflows             |
 | `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION` | 启用 prompt suggestions    |
+| `CLAUDE_CODE_ENABLE_AUTO_MODE`         | 启用 auto mode classifier |
 | `CLAUDE_CODE_ENABLE_TASKS`             | 启用 tasks                 |
 | `CLAUDE_CODE_HTTP_PROXY`               | HTTP 代理                  |
 | `CLAUDE_CODE_HTTPS_PROXY`              | HTTPS 代理                 |
@@ -98,22 +100,28 @@ strings "$(command -v claude)" | sort -u
 | 参数                                | 说明                                                                       |
 | --------------------------------- | ------------------------------------------------------------------------ |
 | `--model <model>`                 | 指定模型                                                                     |
-| `--fallback-model <model>`        | print 模式下指定过载/不可用时的 fallback 模型                                          |
+| `--fallback-model <model>`        | 指定 fallback 模型（仅 `--print`）                                               |
 | `--effort <level>`                | 推理力度：`low`、`medium`、`high`、`xhigh`、`max`                                 |
 | `--permission-mode <mode>`        | 权限模式：`acceptEdits`、`auto`、`bypassPermissions`、`default`、`dontAsk`、`plan` |
+| `--dangerously-skip-permissions`  | 跳过权限检查                                                                   |
+| `--allow-dangerously-skip-permissions` | 允许使用 bypass 模式                                                       |
 | `-c, --continue`                  | 继续当前目录最近一次会话                                                             |
 | `-r, --resume [value]`            | 恢复会话                                                                     |
+| `--from-pr [value]`               | 恢复 PR 关联会话                                                               |
 | `--fork-session`                  | resume / continue 时创建新 session ID                                        |
 | `--session-id <uuid>`             | 使用指定 session ID                                                          |
 | `-n, --name <name>`               | 设置会话显示名                                                                  |
 | `-p, --print`                     | 非交互模式                                                                    |
 | `--input-format <format>`         | print 模式输入格式：`text`、`stream-json`                                        |
 | `--output-format <format>`        | print 模式输出格式：`text`、`json`、`stream-json`                                 |
+| `--include-partial-messages`      | 输出 partial 消息块                                                           |
+| `--include-hook-events`           | 输出 hook 事件                                                               |
+| `--replay-user-messages`          | 回显 stdin 用户消息                                                           |
 | `--json-schema <schema>`          | 结构化输出 JSON Schema                                                        |
 | `--max-budget-usd <amount>`       | print 模式最大 API 花费                                                        |
+| `--no-session-persistence`        | 禁用会话持久化                                                                  |
 | `--mcp-config <configs...>`       | 加载 MCP 配置                                                                |
 | `--strict-mcp-config`             | 只使用 `--mcp-config` 指定的 MCP                                               |
-| `--mcp-debug`                     | 已废弃，改用 `--debug`                                                         |
 | `--add-dir <directories...>`      | 增加可访问目录                                                                  |
 | `--settings <file-or-json>`       | 指定 settings                                                              |
 | `--setting-sources <sources>`     | 指定 settings 来源：`user`、`project`、`local`                                  |
@@ -123,16 +131,25 @@ strings "$(command -v claude)" | sort -u
 | `--allowed-tools <tools...>`      | 允许的工具列表                                                                  |
 | `--disallowed-tools <tools...>`   | 禁止的工具列表                                                                  |
 | `--system-prompt <prompt>`        | 覆盖 system prompt                                                         |
+| `--system-prompt-file <path>`     | 从文件加载 system prompt                                                     |
 | `--append-system-prompt <prompt>` | 追加 system prompt                                                         |
+| `--append-system-prompt-file <path>` | 从文件追加 system prompt                                                   |
+| `--exclude-dynamic-system-prompt-sections` | 排除动态 system prompt 段落                                             |
 | `--file <specs...>`               | 启动时下载文件资源                                                                |
 | `--plugin-dir <path>`             | 加载本地 plugin                                                              |
 | `--plugin-url <url>`              | 从 URL 加载 plugin zip                                                      |
-| `--bare`                          | 极简模式，跳过 hooks、LSP、plugin sync、auto-memory、CLAUDE.md 自动发现等                |
+| `--bare`                          | 极简模式                                                                     |
+| `--safe-mode`                     | 安全模式                                                                     |
+| `--betas <betas...>`              | 追加 API beta headers                                                       |
+| `--brief`                         | 启用 SendUserMessage 工具                                                     |
+| `--prompt-suggestions`            | 启用 prompt 建议                                                              |
 | `--ide`                           | 启动时自动连接 IDE                                                              |
 | `--chrome` / `--no-chrome`        | 启用或禁用 Chrome 集成                                                          |
 | `--remote-control [name]`         | 启用 Remote Control                                                        |
+| `--remote-control-session-name-prefix <prefix>` | 设置 Remote Control 会话名前缀                                      |
 | `--worktree [name]`               | 为 session 创建 git worktree                                                |
 | `--tmux`                          | 配合 `--worktree` 创建 tmux session                                          |
+| `--ax-screen-reader`              | 适配读屏器                                                                    |
 | `--debug [filter]`                | 启用 debug，可指定过滤器                                                          |
 | `--debug-file <path>`             | 写 debug 日志到指定文件                                                          |
 | `--verbose`                       | 启用详细输出                                                                   |
