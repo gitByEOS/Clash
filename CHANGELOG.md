@@ -1,5 +1,10 @@
 # ChangeLog
 
+## v0.3.0
+
+- 新增 `clash hooks` 可视化 Hooks 编辑器，携带多个示例
+- 变更 `clash prompt` 改为 `clash prompts`
+
 ## v0.2.0
 
 - 新增 `clash lark` 飞书群组监听

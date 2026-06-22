@@ -98,6 +98,10 @@ fn notify_script_path() -> PathBuf {
     hooks_tools_dir().join("notify.sh")
 }
 
+fn viteplus_session_script_path() -> PathBuf {
+    hooks_tools_dir().join("viteplus_session_start.sh")
+}
+
 fn backup_file_script_path() -> PathBuf {
     hooks_tools_dir().join("backup_file.sh")
 }
@@ -113,6 +117,7 @@ fn execute_confirm_script_path() -> PathBuf {
 fn ensure_hook_tools() -> Result<(), String> {
     ensure_hook_tool(&dont_rm_script_path(), DONT_RM_SCRIPT)?;
     ensure_hook_tool(&notify_script_path(), NOTIFY_SCRIPT)?;
+    ensure_hook_tool(&viteplus_session_script_path(), VITEPLUS_SESSION_SCRIPT)?;
     ensure_hook_tool(&backup_file_script_path(), BACKUP_FILE_SCRIPT)?;
     ensure_hook_tool(&hook_detail_script_path(), HOOK_DETAIL_SCRIPT)?;
     ensure_hook_tool(&execute_confirm_script_path(), EXECUTE_CONFIRM_SCRIPT)?;
@@ -236,17 +241,43 @@ fn handle_requests(listener: TcpListener) -> Result<(), ()> {
 }
 
 fn handle_stream(stream: &mut TcpStream) -> Result<bool, String> {
+    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 4096];
+    let mut header_end = None;
+    let mut content_length = 0usize;
 
     loop {
-        let n = stream.read(&mut chunk).map_err(|e| e.to_string())?;
+        let n = match stream.read(&mut chunk) {
+            Ok(n) => n,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err("读取请求超时".to_string());
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         if n == 0 {
             break;
         }
         buffer.extend_from_slice(&chunk[..n]);
-        if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
+        if header_end.is_none() {
+            header_end = find_header_end(&buffer);
+            if let Some(end) = header_end {
+                content_length = parse_content_length(&buffer[..end])?;
+            }
+        }
+        if let Some(end) = header_end {
+            if buffer.len() >= end + 4 + content_length {
+                break;
+            }
         }
     }
 
@@ -267,11 +298,7 @@ fn handle_stream(stream: &mut TcpStream) -> Result<bool, String> {
         Ok(false)
     } else if first_line.contains("POST /save") {
         // 解析 body 并保存
-        let body_start = buffer
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .unwrap_or(0)
-            + 4;
+        let body_start = find_header_end(&buffer).ok_or_else(|| "缺少 HTTP 头".to_string())? + 4;
         let body = String::from_utf8_lossy(&buffer[body_start..]);
         let hooks: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
 
@@ -287,6 +314,25 @@ fn handle_stream(stream: &mut TcpStream) -> Result<bool, String> {
         write_response(stream, 404, "text/plain", "Not Found")?;
         Ok(false)
     }
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn parse_content_length(headers: &[u8]) -> Result<usize, String> {
+    let text = String::from_utf8_lossy(headers);
+    for line in text.lines().skip(1) {
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                return value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| "Content-Length 不是数字".to_string());
+            }
+        }
+    }
+    Ok(0)
 }
 
 fn write_response(
@@ -460,6 +506,10 @@ fn render_hooks_html() -> String {
         "sh {}",
         shell_single_quote(&notify_script_path().to_string_lossy())
     );
+    let viteplus_session_command = format!(
+        "sh {}",
+        shell_single_quote(&viteplus_session_script_path().to_string_lossy())
+    );
     let backup_file_command = format!(
         "sh {}",
         shell_single_quote(&backup_file_script_path().to_string_lossy())
@@ -484,6 +534,13 @@ fn render_hooks_html() -> String {
         &format!(
             "const NOTIFY_SCRIPT_COMMAND = {};",
             js_string_literal(&notify_command)
+        ),
+    );
+    push_line(
+        &mut html,
+        &format!(
+            "const VITEPLUS_SESSION_SCRIPT_COMMAND = {};",
+            js_string_literal(&viteplus_session_command)
         ),
     );
     push_line(
@@ -531,11 +588,7 @@ fn shell_single_quote(value: &str) -> String {
 const DONT_RM_SCRIPT: &str = r#"#!/bin/sh
 set -eu
 
-payload_file="$(mktemp)"
-trap 'rm -f "$payload_file"' EXIT
-cat > "$payload_file"
-
-python3 - "$payload_file" <<'PY'
+python3 -c '
 import datetime
 import json
 import os
@@ -544,8 +597,10 @@ import shlex
 import shutil
 import sys
 
-with open(sys.argv[1], "r", encoding="utf-8") as payload_handle:
-    payload = json.load(payload_handle)
+try:
+    payload = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(0)
 
 command = (payload.get("tool_input") or {}).get("command") or ""
 
@@ -593,7 +648,7 @@ if moved:
     for source, dest in moved:
         print(str(source) + " -> " + str(dest), file=sys.stderr)
     sys.exit(2)
-PY
+'
 "#;
 
 const NOTIFY_SCRIPT: &str = r#"#!/bin/sh
@@ -607,14 +662,116 @@ if command -v afplay >/dev/null 2>&1 && [ -f "$sound" ]; then
 fi
 "#;
 
+const VITEPLUS_SESSION_SCRIPT: &str = r#"#!/bin/sh
+set -eu
+
+python3 -c '
+import json
+import os
+import pathlib
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except json.JSONDecodeError:
+    payload = {}
+
+def first_string(*values):
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+def ancestors(start):
+    current = start.resolve()
+    while True:
+        yield current
+        if current.parent == current:
+            break
+        current = current.parent
+
+def read_json(path):
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+def has_viteplus_config(root):
+    names = [
+        "viteplus.config.js",
+        "viteplus.config.mjs",
+        "viteplus.config.cjs",
+        "viteplus.config.ts",
+        "viteplus.config.mts",
+        "viteplus.config.cts",
+    ]
+    return any((root / name).is_file() for name in names)
+
+def package_uses_viteplus(pkg):
+    deps = {}
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        value = pkg.get(key)
+        if isinstance(value, dict):
+            deps.update(value)
+
+    if "viteplus" in deps or "@viteplus/cli" in deps:
+        return True
+
+    scripts = pkg.get("scripts")
+    if not isinstance(scripts, dict):
+        return False
+
+    return any(isinstance(script, str) and "vp " in f" {script} " for script in scripts.values())
+
+def find_viteplus_root(start):
+    for root in ancestors(start):
+        if has_viteplus_config(root):
+            return root
+        pkg = read_json(root / "package.json")
+        if isinstance(pkg, dict) and package_uses_viteplus(pkg):
+            return root
+    return None
+
+tool_input = payload.get("tool_input") or {}
+cwd = pathlib.Path(first_string(
+    payload.get("cwd"),
+    payload.get("workspace"),
+    payload.get("workspaceRoot"),
+    payload.get("projectRoot"),
+    tool_input.get("cwd"),
+    os.getcwd(),
+))
+
+project_root = find_viteplus_root(cwd)
+if project_root is None:
+    sys.exit(0)
+
+print(f"""当前项目识别为 viteplus 项目：{project_root}
+
+优先使用 viteplus 命令：
+- 启动开发服务器：vp dev
+- 生产构建：vp build
+- 构建并监听：vp build --watch
+- 本地预览生产构建：vp preview
+- 格式化 + lint + 类型检查：vp check
+- 检查并自动修复：vp check --fix
+- 仅格式化：vp fmt
+- 检查格式而不修改：vp fmt --check
+- 仅 lint：vp lint
+- lint 并自动修复：vp lint --fix
+- 运行测试：vp test
+- 监听模式测试：vp test watch
+- 运行 package.json 脚本：vp run <script>
+
+修改代码后优先用 vp check 验证。不要默认使用 npm run 或 pnpm run，除非项目明确要求。""")
+'
+"#;
+
 const BACKUP_FILE_SCRIPT: &str = r#"#!/bin/sh
 set -eu
 
-payload_file="$(mktemp)"
-trap 'rm -f "$payload_file"' EXIT
-cat > "$payload_file"
-
-python3 - "$payload_file" <<'PY'
+python3 -c '
 import datetime
 import json
 import os
@@ -622,8 +779,10 @@ import pathlib
 import shutil
 import sys
 
-with open(sys.argv[1], "r", encoding="utf-8") as payload_handle:
-    payload = json.load(payload_handle)
+try:
+    payload = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(0)
 
 def first_string(*values):
     for value in values:
@@ -670,7 +829,7 @@ if dest.exists():
 dest.parent.mkdir(parents=True, exist_ok=True)
 shutil.copy2(source, dest)
 print("已备份文件 " + str(source) + " -> " + str(dest), file=sys.stderr)
-PY
+'
 "#;
 
 const HOOK_DETAIL_SCRIPT: &str = r#"#!/bin/sh
@@ -1365,6 +1524,20 @@ const HOOK_EXAMPLES = {
       }
     }
   ],
+  SessionStart: [
+    {
+      title: 'viteplus 项目提示词',
+      description: '会话开始时检查当前目录和父目录，识别 viteplus 后注入 vp 命令规范',
+      entry: {
+        hooks: [
+          {
+            type: 'command',
+            command: VITEPLUS_SESSION_SCRIPT_COMMAND
+          }
+        ]
+      }
+    }
+  ],
   Stop: [
     {
       title: '回复结束提醒',
@@ -1543,7 +1716,7 @@ function addHookEntry(container, entry, idx, hookType) {
   const hooks = entry.hooks || [];
 
   // 检查是否需要 matcher (SessionStart 等)
-  const needsMatcher = !['SessionStart', 'SessionEnd', 'Setup', 'SubagentStart', 'Notification', 'UserPromptSubmit', 'StopFailure', 'TeammateIdle', 'TaskCreated', 'TaskCompleted', 'FileChanged', 'PreCompact', 'PostCompact', 'Elicitation', 'ElicitationResult'].includes(hookType);
+  const needsMatcher = needsMatcherForHook(hookType);
 
   div.innerHTML = `
     ${needsMatcher ? `
@@ -1629,6 +1802,10 @@ function isValidTypeForHook(type, hookType) {
     return ['Stop', 'SubagentStop'].includes(hookType);
   }
   return true;
+}
+
+function needsMatcherForHook(hookType) {
+  return !['SessionStart', 'SessionEnd', 'Setup', 'SubagentStart', 'Notification', 'UserPromptSubmit', 'StopFailure', 'TeammateIdle', 'TaskCreated', 'TaskCompleted', 'FileChanged', 'PreCompact', 'PostCompact', 'Elicitation', 'ElicitationResult'].includes(hookType);
 }
 
 // 获取字段 placeholder
@@ -1731,7 +1908,7 @@ document.getElementById('save-hook').addEventListener('click', () => {
     });
 
     if (hooks.length > 0) {
-      if (currentEditType === 'FileChanged' || currentEditType === 'UserPromptSubmit' || (currentEditType === 'PostToolUse' && !matcher)) {
+      if (!needsMatcherForHook(currentEditType) || (currentEditType === 'PostToolUse' && !matcher)) {
         entries.push({ hooks });
       } else {
         entries.push({ matcher, hooks });
