@@ -64,12 +64,28 @@ pub fn system_prompt_path() -> PathBuf {
 /// Ensure system-prompt file exists, create if not
 pub fn ensure_system_prompt_file() {
     let path = system_prompt_path();
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(&path, crate::prompts::DEFAULT_SYSTEM_PROMPT);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
     }
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let managed = crate::prompts::managed_system_prompt();
+    let next = merge_managed_system_prompt(&existing, &managed);
+    if next != existing {
+        let _ = fs::write(&path, next);
+    }
+}
+
+fn merge_managed_system_prompt(existing: &str, managed: &str) -> String {
+    if let Some(tag_start) = existing.find("<clash-system-prompt") {
+        if let Some(close_start_rel) = existing[tag_start..].find("</clash-system-prompt>") {
+            let close_start = tag_start + close_start_rel;
+            let close_end = close_start + "</clash-system-prompt>".len();
+            let before = &existing[..tag_start];
+            let after = &existing[close_end..];
+            return format!("{before}{managed}{after}");
+        }
+    }
+    managed.to_string()
 }
 
 /// Read system prompt from file, create default if not exists
@@ -377,5 +393,28 @@ mod tests {
     fn test_config_path_default() {
         let path = config_path_for_idx(0);
         assert!(path.ends_with("clash/auth"));
+    }
+
+    #[test]
+    fn merge_managed_system_prompt_overwrites_when_missing() {
+        let merged = merge_managed_system_prompt(
+            "用户内容",
+            "<clash-system-prompt version=\"x\">\n内置\n</clash-system-prompt>\n",
+        );
+        assert_eq!(
+            merged,
+            "<clash-system-prompt version=\"x\">\n内置\n</clash-system-prompt>\n"
+        );
+    }
+
+    #[test]
+    fn merge_managed_system_prompt_replaces_tagged_block() {
+        let existing = "前\n<clash-system-prompt version=\"old\">\n旧\n</clash-system-prompt>\n后";
+        let managed = "<clash-system-prompt version=\"new\">\n新\n</clash-system-prompt>\n";
+        let merged = merge_managed_system_prompt(existing, managed);
+        assert!(merged.contains("version=\"new\""));
+        assert!(!merged.contains("\n旧\n"));
+        assert!(merged.starts_with("前\n"));
+        assert!(merged.ends_with("后"));
     }
 }

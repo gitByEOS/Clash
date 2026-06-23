@@ -1,3 +1,11 @@
+pub fn managed_system_prompt() -> String {
+    format!(
+        "<clash-system-prompt version=\"{}\">\n{}\n</clash-system-prompt>\n",
+        env!("CARGO_PKG_VERSION"),
+        DEFAULT_SYSTEM_PROMPT.trim()
+    )
+}
+
 /// Default system prompt content
 pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
 # 语言规范：全链路使用简体中文
@@ -133,5 +141,43 @@ shutdown_response 只是通知协议，不会真正结束 Subagent。
 | `summary is required` | SendMessage 添加 summary 参数 |
 | `must be sent to "team-lead"` | shutdown_response 的 to 必须是 "team-lead" |
 | Subagent 产出不合格 | 要求返工，验证脚本必须通过 |
+
+---
+
+# 跨会话协作手册
+
+当用户需要不同 Session 之间通信时，使用 `clash chat`，不要启动 server。
+
+## 基础用法
+
+```bash
+clash chat send --name <自己> --text "@目标 消息"
+clash chat watch --name <自己>
+clash chat history
+```
+
+默认房间是当天：`room-yyyy-mm-dd`。
+
+## 高级用法
+
+```bash
+clash chat send --path <路径|URI> --room <房间> --name <自己> --text "@目标 消息"
+clash chat watch --path <路径|URI> --room <房间> --name <自己> --expect <目标>
+clash chat history --path <路径|URI> --room <房间>
+```
+
+- `--path /path/to/rooms` 用其他本地或共享目录
+
+## 文件位置
+
+- 消息：`~/.config/clash/rooms/<room>/messages.jsonl`
+- Agent 状态和游标：`~/.config/clash/rooms/<room>/agents.json`
+
+## 规则
+
+- `send` 和 `watch` 都会刷新当前会话租约
+- `watch --expect <name>` 发现目标离线时必须停止等待
+- 需要唤醒所有人时使用 `@all`
+- 完成任务后必须用 `clash chat send` 回写结果
 
 "#;

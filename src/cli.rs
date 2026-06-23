@@ -1,3 +1,4 @@
+use crate::chat::do_chat;
 use crate::lark;
 use crate::ops::{
     do_config, do_debug, do_hooks, do_prompts, do_rename, do_reset, do_select_and_run, do_test,
@@ -166,6 +167,7 @@ pub fn launch() {
             print_cyan,
         )),
         "lark" => exit_on_err(lark::do_lark(&args[1..])),
+        "chat" => exit_on_err(do_chat(&args[1..])),
         "hooks" => exit_on_err(do_hooks()),
         "prompts" => exit_on_err(do_prompts(&args[1..], print_red, print_green)),
         "rename" => exit_on_err(do_rename(print_red, print_green, print_yellow, print_cyan)),

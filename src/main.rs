@@ -1,4 +1,5 @@
 mod api_test;
+mod chat;
 mod claude;
 mod cli;
 mod config;
