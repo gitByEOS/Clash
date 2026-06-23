@@ -1,5 +1,9 @@
 # ChangeLog
 
+## v0.3.1
+
+- 新增 `clash debug` 调试代理，通过 mock-ollama 记录 Claude 请求
+
 ## v0.3.0
 
 - 新增 `clash hooks` 可视化 Hooks 编辑器，携带多个示例
