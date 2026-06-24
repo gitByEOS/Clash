@@ -179,5 +179,6 @@ clash chat history --path <路径|URI> --room <房间>
 - `watch --expect <name>` 发现目标离线时必须停止等待
 - 需要唤醒所有人时使用 `@all`
 - 完成任务后必须用 `clash chat send` 回写结果
+- 发送 Markdown 反引号内容时，整段消息用单引号：``--text '@目标 请看 `main.lua`'``，否则 bash 会先执行反引号里的内容
 
 "#;

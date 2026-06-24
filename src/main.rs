@@ -1,6 +1,7 @@
 mod api_test;
 mod chat;
 mod claude;
+mod claude_history;
 mod cli;
 mod config;
 mod crypto;

@@ -1,8 +1,8 @@
 use crate::chat::do_chat;
 use crate::lark;
 use crate::ops::{
-    do_config, do_debug, do_hooks, do_prompts, do_rename, do_reset, do_select_and_run, do_test,
-    do_update, do_version,
+    do_config, do_debug, do_hooks, do_prompts, do_rename, do_reset, do_resume, do_select_and_run,
+    do_test, do_update, do_version,
 };
 use crate::statusline;
 use std::collections::HashMap;
@@ -159,6 +159,13 @@ pub fn launch() {
             parse_config_set_args,
         )),
         "reset" => exit_on_err(do_reset(print_red, print_green)),
+        "resume" => exit_on_err(do_resume(
+            &args[1..],
+            print_red,
+            print_green,
+            print_yellow,
+            print_cyan,
+        )),
         "test" => exit_on_err(do_test(
             &args[1..],
             print_red,

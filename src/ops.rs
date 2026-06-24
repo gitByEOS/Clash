@@ -1,5 +1,6 @@
 use crate::api_test;
 use crate::claude;
+use crate::claude_history::{self, SessionScope};
 use crate::cli::{print_cyan, print_green, print_red, print_yellow, ConfigSetArgs};
 use crate::config::{self, ClashConfig, ConfigSlot};
 use crate::crypto;
@@ -17,6 +18,7 @@ use std::process::{self, Child, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[derive(Clone)]
 pub struct RunModelChoice {
     pub label: String,
     pub model: String,
@@ -651,8 +653,23 @@ fn select_choice_from_list(choices: Vec<RunModelChoice>) -> Result<RunModelChoic
         .ok_or(())
 }
 
-fn select_run_choice() -> Result<RunModelChoice, ()> {
-    select_choice_from_list(load_run_choices()?)
+fn select_run_choice_with_model_hint(model_hint: Option<&str>) -> Result<RunModelChoice, ()> {
+    let choices = load_run_choices()?;
+    let Some(model_hint) = model_hint else {
+        return select_choice_from_list(choices);
+    };
+
+    let normalized_model = remove_size_marker(model_hint);
+    let matches = choices
+        .iter()
+        .filter(|choice| remove_size_marker(&choice.model) == normalized_model)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    match matches.len() {
+        1 => Ok(matches.into_iter().next().unwrap()),
+        _ => select_choice_from_list(choices),
+    }
 }
 
 fn select_debug_choice(args: &DebugArgs) -> Result<RunModelChoice, ()> {
@@ -956,16 +973,14 @@ pub fn do_debug(
     process::exit(status.code().unwrap_or(1));
 }
 
-pub fn do_select_and_run(
+fn launch_selected_claude(
     extra_args: &[String],
-    _print_red: fn(&str),
-    _print_green: fn(&str),
-    _print_yellow: fn(&str),
-    _print_cyan: fn(&str),
+    model_hint: Option<&str>,
+    cwd_hint: Option<&str>,
 ) -> Result<(), ()> {
     statusline::ensure_statusline_config();
 
-    let choice = select_run_choice()?;
+    let choice = select_run_choice_with_model_hint(model_hint)?;
     let auth_token = crypto::decrypt_token(&choice.config.auth_token_encrypted).map_err(|_| {
         print_red("无法解密 API Key");
     })?;
@@ -982,20 +997,76 @@ pub fn do_select_and_run(
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let err = process::Command::new(&claude_path).args(&cmd_args).exec();
+        let mut command = process::Command::new(&claude_path);
+        command.args(&cmd_args);
+        if let Some(cwd) = cwd_hint {
+            command.current_dir(cwd);
+        }
+        let err = command.exec();
         print_red(&format!("exec claude 失败: {}", err));
         process::exit(127);
     }
 
     #[cfg(not(unix))]
     {
-        let status = process::Command::new(&claude_path)
-            .args(&cmd_args)
-            .status()
-            .expect("无法启动 claude");
+        let mut command = process::Command::new(&claude_path);
+        command.args(&cmd_args);
+        if let Some(cwd) = cwd_hint {
+            command.current_dir(cwd);
+        }
+        let status = command.status().expect("无法启动 claude");
         process::exit(status.code().unwrap_or(1));
     }
 
     #[allow(unreachable_code)]
     Ok(())
+}
+
+pub fn do_resume(
+    extra_args: &[String],
+    _print_red: fn(&str),
+    _print_green: fn(&str),
+    _print_yellow: fn(&str),
+    _print_cyan: fn(&str),
+) -> Result<(), ()> {
+    statusline::ensure_statusline_config();
+
+    let current_sessions =
+        claude_history::load_sessions(SessionScope::CurrentProject).map_err(|err| {
+            print_red(&err);
+        })?;
+    let all_sessions = claude_history::load_sessions(SessionScope::AllProjects).map_err(|err| {
+        print_red(&err);
+    })?;
+
+    if current_sessions.is_empty() && all_sessions.is_empty() {
+        print_yellow("未找到 Claude 历史会话");
+        return Err(());
+    }
+
+    let session_id = tui::select_resume_session(&current_sessions, &all_sessions).ok_or(())?;
+    let selected_session = current_sessions
+        .iter()
+        .chain(all_sessions.iter())
+        .find(|session| session.id == session_id)
+        .cloned();
+    let model_hint = selected_session
+        .as_ref()
+        .and_then(|session| session.model.as_deref());
+    let cwd_hint = selected_session
+        .as_ref()
+        .and_then(|session| session.cwd.as_deref());
+    let mut resume_args = vec!["--resume".to_string(), session_id];
+    resume_args.extend(extra_args.iter().cloned());
+    launch_selected_claude(&resume_args, model_hint, cwd_hint)
+}
+
+pub fn do_select_and_run(
+    extra_args: &[String],
+    _print_red: fn(&str),
+    _print_green: fn(&str),
+    _print_yellow: fn(&str),
+    _print_cyan: fn(&str),
+) -> Result<(), ()> {
+    launch_selected_claude(extra_args, None, None)
 }

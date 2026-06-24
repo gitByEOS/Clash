@@ -22,6 +22,7 @@
 | 启动可用    | 不确定      | 确定      |
 | 状态栏     | 额外下载     | 自动接入    |
 | 更新提示    | 右下tips   | 启动提示    |
+| 会话管理    | 几乎没有  | 跨区+搜索  |
 
 
 ## 特有
@@ -35,7 +36,9 @@
 ## 启动效果图
 
 VS Code 为例：
-clash-launch
+![lauch](docs/clash-launch.png)
+
+![session](docs/session-search.png)
 
 ## 平台支持
 
@@ -105,6 +108,7 @@ clash test --idx 1 --model m  # 只测 idx1 的单个模型
 clash debug                   # 选模型后启动 Claude，并打开 mock-ollama 日志页
 clash debug --idx 1 --model m # 指定账户和模型启动 debug
 clash debug --port 11436      # 指定 mock-ollama 监听端口，默认 11435
+clash resume                  # 分屏搜索 Claude 历史并恢复会话
 clash chat send --name A --text "@B 看一下"  # 向另一个 Claude 发消息
 clash chat watch --name B                   # 等待发给 B 的消息
 clash prompts                 # 捕获 Claude Code 请求，生成并打开 HTML 报告

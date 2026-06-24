@@ -9,6 +9,7 @@ import subprocess
 import sys
 import struct
 import termios
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -136,6 +137,38 @@ def main() -> int:
     shared.assert_tui_search_filter(search_screen, "kim")
     results.append("- 输入 kim 过滤后只显示匹配模型")
 
+    log("test resume tui")
+    prepare_resume_history(env, artifact_dir)
+    resume_raw, resume_screen = capture_frame(env, ["clash", "resume"], until=b"resume-current")
+    assert_resume_tui_current(resume_screen)
+    results.append("- clash resume 默认显示当前项目会话和右侧历史")
+
+    resume_search_raw, resume_search_screen = capture_frame(
+        env,
+        ["clash", "resume"],
+        keys=[b"u", b"n", b"i", b"q", b"u", b"e"],
+        until=b"resume-current",
+    )
+    assert_resume_search_filter(resume_search_screen)
+    results.append("- resume 搜索正文后左侧会话列表同步过滤")
+
+    resume_all_raw, resume_all_screen = capture_frame(
+        env,
+        ["clash", "resume"],
+        keys=[b"\x1b[C"],
+        until=b"resume-current",
+    )
+    assert_resume_all_scope(resume_all_screen)
+    results.append("- resume 右箭头切换到全部项目")
+
+    resume_exec_raw, resume_exec_screen = capture_resume_exec(env)
+    assert_resume_exec(resume_exec_screen)
+    results.append("- resume 确认后向 Claude 透传 --resume <session-id>")
+
+    resume_all_exec_raw, resume_all_exec_screen = capture_resume_all_exec(env, artifact_dir)
+    assert_resume_all_exec(resume_all_exec_screen, artifact_dir)
+    results.append("- resume 全部项目会话会切到历史 cwd 后启动")
+
     write_artifacts(
         artifact_dir,
         single_raw,
@@ -154,6 +187,19 @@ def main() -> int:
         search_screen,
         run_raw,
         run_screen,
+    )
+    write_resume_artifacts(
+        artifact_dir,
+        resume_raw,
+        resume_screen,
+        resume_search_raw,
+        resume_search_screen,
+        resume_all_raw,
+        resume_all_screen,
+        resume_exec_raw,
+        resume_exec_screen,
+        resume_all_exec_raw,
+        resume_all_exec_screen,
     )
     write_report(artifact_dir, results, single_screen, initial_screen, renamed_screen, down_screen, up_screen, esc_screen, search_screen, run_screen)
 
@@ -190,7 +236,7 @@ def capture_frame(
 
     for key in keys:
         os.write(master, key)
-        raw.extend(shared.drain(master, 0.5))
+        raw.extend(shared.drain(master, 1.0))
 
     shared.stop_child(pid)
     raw.extend(shared.drain(master, 0.2))
@@ -199,6 +245,104 @@ def capture_frame(
     screen = shared.TerminalScreen(shared.ROWS, shared.COLS)
     screen.feed(bytes(raw))
     return bytes(raw), screen
+
+
+def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
+    home = artifact_dir / "home"
+    projects = home / ".claude" / "projects"
+    other_cwd = artifact_dir / "other-project"
+    other_cwd.mkdir(parents=True, exist_ok=True)
+    current_project = projects / encode_project_dir(ROOT)
+    other_project = projects / encode_project_dir(other_cwd)
+    current_project.mkdir(parents=True, exist_ok=True)
+    other_project.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+
+    write_jsonl(
+        current_project / "current-session.jsonl",
+        [
+            {
+                "type": "user",
+                "message": {"role": "user", "content": "resume-current unique body"},
+                "timestamp": "2026-06-24T10:00:00.000Z",
+                "cwd": str(ROOT),
+                "sessionId": "current-session",
+            },
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "model": "qwen3.6-plus", "content": [{"type": "text", "text": "右侧历史 preview"}]},
+                "timestamp": "2026-06-24T10:01:00.000Z",
+                "sessionId": "current-session",
+            },
+            {"type": "ai-title", "aiTitle": "resume-current", "sessionId": "current-session"},
+        ],
+    )
+    write_jsonl(
+        current_project / "second-session.jsonl",
+        [
+            {
+                "type": "user",
+                "message": {"role": "user", "content": "普通当前项目会话"},
+                "timestamp": "2026-06-24T09:00:00.000Z",
+                "cwd": str(ROOT),
+                "sessionId": "second-session",
+            }
+        ],
+    )
+    write_jsonl(
+        other_project / "other-session.jsonl",
+        [
+            {
+                "type": "user",
+                "message": {"role": "user", "content": "other project body"},
+                "timestamp": "2026-06-24T11:00:00.000Z",
+                "cwd": str(other_cwd),
+                "sessionId": "other-session",
+            },
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "model": "qwen3.6-plus", "content": "other assistant reply"},
+                "timestamp": "2026-06-24T11:01:00.000Z",
+                "sessionId": "other-session",
+            },
+            {"type": "ai-title", "aiTitle": "other-project-title", "sessionId": "other-session"},
+        ],
+    )
+
+
+def encode_project_dir(path: Path) -> str:
+    return str(path).replace("/", "-")
+
+
+def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    import json
+
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+
+
+def capture_resume_exec(env: dict[str, str]) -> tuple[bytes, shared.TerminalScreen]:
+    with tempfile.TemporaryDirectory(prefix="clash-e2e-bin-") as bin_dir:
+        claude = Path(bin_dir) / "claude"
+        claude.write_text("#!/bin/sh\necho PWD=$(pwd)\necho ARGS=$*\n", encoding="utf-8")
+        claude.chmod(0o755)
+        run_env = env.copy()
+        run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
+        return capture_frame(run_env, ["clash", "resume"], keys=[b"\r"], until=b"resume-current")
+
+
+def capture_resume_all_exec(env: dict[str, str], artifact_dir: Path) -> tuple[bytes, shared.TerminalScreen]:
+    with tempfile.TemporaryDirectory(prefix="clash-e2e-bin-") as bin_dir:
+        claude = Path(bin_dir) / "claude"
+        claude.write_text("#!/bin/sh\necho PWD=$(pwd)\necho ARGS=$*\n", encoding="utf-8")
+        claude.chmod(0o755)
+        run_env = env.copy()
+        run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
+        return capture_frame(
+            run_env,
+            ["clash", "resume"],
+            keys=[b"\x1b[C", b"\r"],
+            until=b"other-project-title",
+        )
 
 
 def log(message: str) -> None:
@@ -248,6 +392,83 @@ def write_artifacts(
     write_png(artifact_dir / "after-esc.png", esc_screen)
     write_png(artifact_dir / "after-search.png", search_screen)
     write_png(artifact_dir / "run.png", run_screen)
+
+
+def write_resume_artifacts(
+    artifact_dir: Path,
+    resume_raw: bytes,
+    resume_screen: shared.TerminalScreen,
+    resume_search_raw: bytes,
+    resume_search_screen: shared.TerminalScreen,
+    resume_all_raw: bytes,
+    resume_all_screen: shared.TerminalScreen,
+    resume_exec_raw: bytes,
+    resume_exec_screen: shared.TerminalScreen,
+    resume_all_exec_raw: bytes,
+    resume_all_exec_screen: shared.TerminalScreen,
+) -> None:
+    (artifact_dir / "resume-current.raw").write_bytes(resume_raw)
+    (artifact_dir / "resume-search.raw").write_bytes(resume_search_raw)
+    (artifact_dir / "resume-all.raw").write_bytes(resume_all_raw)
+    (artifact_dir / "resume-exec.raw").write_bytes(resume_exec_raw)
+    (artifact_dir / "resume-all-exec.raw").write_bytes(resume_all_exec_raw)
+    (artifact_dir / "resume-current.txt").write_text(render_text(resume_screen), encoding="utf-8")
+    (artifact_dir / "resume-search.txt").write_text(render_text(resume_search_screen), encoding="utf-8")
+    (artifact_dir / "resume-all.txt").write_text(render_text(resume_all_screen), encoding="utf-8")
+    (artifact_dir / "resume-exec.txt").write_text(render_text(resume_exec_screen), encoding="utf-8")
+    (artifact_dir / "resume-all-exec.txt").write_text(render_text(resume_all_exec_screen), encoding="utf-8")
+    write_png(artifact_dir / "resume-current.png", resume_screen)
+    write_png(artifact_dir / "resume-search.png", resume_search_screen)
+    write_png(artifact_dir / "resume-all.png", resume_all_screen)
+    write_png(artifact_dir / "resume-exec.png", resume_exec_screen)
+    write_png(artifact_dir / "resume-all-exec.png", resume_all_exec_screen)
+
+
+def assert_resume_tui_current(screen: shared.TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    assert_resume_prompt(lines)
+    shared.assert_contains(lines, "[当前项目]")
+    shared.assert_contains(lines, "resume-current")
+    shared.assert_not_contains(lines, "current-session")
+    shared.assert_contains(lines, "resume-current unique body")
+    shared.assert_contains(lines, "对话历史")
+    shared.assert_not_contains(lines, "other-project-title")
+
+
+def assert_resume_search_filter(screen: shared.TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    assert_resume_prompt(lines)
+    shared.assert_contains(lines, "clash resume> unique")
+    shared.assert_contains(lines, "1/1")
+    shared.assert_contains(lines, "resume-current")
+    shared.assert_contains(lines, "resume-current unique body")
+    shared.assert_not_contains(lines, "second-session")
+
+
+def assert_resume_all_scope(screen: shared.TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    assert_resume_prompt(lines)
+    shared.assert_contains(lines, "[全部项目]")
+    shared.assert_contains(lines, "[other-project]")
+    shared.assert_contains(lines, "other-project-title")
+
+
+def assert_resume_exec(screen: shared.TerminalScreen) -> None:
+    lines = screen.semantic_lines()
+    shared.assert_contains(lines, "ARGS=--permission-mode bypassPermissions")
+    shared.assert_contains(lines, "--resume current-session")
+
+
+def assert_resume_all_exec(screen: shared.TerminalScreen, artifact_dir: Path) -> None:
+    lines = screen.semantic_lines()
+    shared.assert_contains(lines, f"PWD={artifact_dir / 'other-project'}")
+    shared.assert_contains(lines, "--resume other-session")
+
+
+def assert_resume_prompt(lines: list[str]) -> None:
+    prompts = [line for line in lines if line.startswith("clash resume>")]
+    if len(prompts) != 1:
+        raise AssertionError(f"expected one resume prompt, got {len(prompts)}: {lines}")
 
 
 def render_text(screen: shared.TerminalScreen) -> str:
