@@ -1,8 +1,8 @@
 # Clash
 
-`clash` 是 Claude Code 的启动器，用于快速切换 Anthropic 兼容 API 渠道和模型。
+`clash` 是 Claude Code 的启动器，专注于提高 Claude-Cli 的使用体验。
 
-命名来自 `Claude-Shell`的缩写，该项目是由 [cc-claude](https://github.com/gitByEOS/open-part-skills) 发展而来。
+命名由 `Claude-Shell` 缩写而来，该项目是由 [cc-claude](https://github.com/gitByEOS/open-part-skills) 发展而来，本来只是个简单的渠道切换工具，随着迭代功能已经越来越多，也越来越好用。
 
 ## 区别
 
