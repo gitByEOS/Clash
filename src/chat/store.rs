@@ -1,7 +1,6 @@
-use crate::chat::protocol::{
-    AgentState, ChatMessage, DEFAULT_LEASE_SECS, MAX_MESSAGE_LINE_BYTES,
-};
+use crate::chat::protocol::{AgentState, ChatMessage, DEFAULT_LEASE_SECS, MAX_MESSAGE_LINE_BYTES};
 use crate::config;
+use fs2::FileExt;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
@@ -14,13 +13,7 @@ pub struct ChatStore {
 }
 
 struct RoomLock {
-    path: PathBuf,
-}
-
-impl Drop for RoomLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
+    _file: File,
 }
 
 #[derive(Debug)]
@@ -90,9 +83,7 @@ impl ChatStore {
         while let Some((line, bytes, is_too_long)) = read_jsonl_line(&mut reader)? {
             current += bytes as u64;
             if is_too_long {
-                return Err(format!(
-                    "消息日志单行超过 {MAX_MESSAGE_LINE_BYTES} 字节"
-                ));
+                return Err(format!("消息日志单行超过 {MAX_MESSAGE_LINE_BYTES} 字节"));
             }
             let Ok(line) = std::str::from_utf8(&line) else {
                 continue;
@@ -135,19 +126,11 @@ impl ChatStore {
     pub fn write_cursor(&self, room: &str, name: &str, offset: u64) -> Result<(), String> {
         validate_segment(room, "room")?;
         validate_segment(name, "name")?;
-        let _lock = self.acquire_room_lock(room)?;
-        let mut agents = self.read_agents(room)?;
-        let state = agents
-            .entry(name.to_string())
-            .or_insert_with(|| AgentState {
-                name: name.to_string(),
-                last_active_ts: 0,
-                lease_until_ts: 0,
-                cursor_offset: 0,
-                status: None,
-            });
+        let mut state = self
+            .read_agent_state(room, name)?
+            .unwrap_or_else(|| empty_agent_state(name));
         state.cursor_offset = offset;
-        self.write_agents(room, &agents)
+        self.write_agent_state(room, name, &state)
     }
 
     pub fn refresh_lease(
@@ -158,30 +141,30 @@ impl ChatStore {
     ) -> Result<AgentState, String> {
         validate_segment(room, "room")?;
         validate_segment(name, "name")?;
-        let _lock = self.acquire_room_lock(room)?;
-        let mut agents = self.read_agents(room)?;
+        let mut state = self
+            .read_agent_state(room, name)?
+            .unwrap_or_else(|| empty_agent_state(name));
         let now = unix_secs();
-        let state = agents
-            .entry(name.to_string())
-            .or_insert_with(|| AgentState {
-                name: name.to_string(),
-                last_active_ts: 0,
-                lease_until_ts: 0,
-                cursor_offset: 0,
-                status: None,
-            });
         state.last_active_ts = now;
         state.lease_until_ts = now + DEFAULT_LEASE_SECS;
         state.status = status.map(str::to_string);
-        let next = state.clone();
-        self.write_agents(room, &agents)?;
-        Ok(next)
+        self.write_agent_state(room, name, &state)?;
+        Ok(state)
     }
 
     pub fn read_agent_state(&self, room: &str, name: &str) -> Result<Option<AgentState>, String> {
         validate_segment(room, "room")?;
         validate_segment(name, "name")?;
-        Ok(self.read_agents(room)?.remove(name))
+        self.migrate_agents_if_needed(room)?;
+        let path = self.agent_path(room, name)?;
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("无法读取 Agent 状态: {e}")),
+        };
+        serde_json::from_str::<AgentState>(&content)
+            .map(Some)
+            .map_err(|e| format!("Agent 状态无效: {e}"))
     }
 
     pub fn is_agent_online(&self, room: &str, name: &str) -> Result<bool, String> {
@@ -191,25 +174,71 @@ impl ChatStore {
             .unwrap_or(false))
     }
 
-    fn read_agents(&self, room: &str) -> Result<BTreeMap<String, AgentState>, String> {
-        let path = self.agents_path(room)?;
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-            Err(e) => return Err(format!("无法读取 agents.json: {e}")),
+    pub fn list_agent_names(&self, room: &str) -> Result<Vec<String>, String> {
+        validate_segment(room, "room")?;
+        self.migrate_agents_if_needed(room)?;
+        let dir = self.agents_dir(room)?;
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("无法读取 Agent 目录: {e}")),
         };
-        serde_json::from_str::<BTreeMap<String, AgentState>>(&content)
-            .map_err(|e| format!("agents.json 无效: {e}"))
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("无法读取 Agent 文件: {e}"))?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(name) = path.file_stem().and_then(|value| value.to_str()) {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+        Ok(names)
     }
 
-    fn write_agents(
-        &self,
-        room: &str,
-        agents: &BTreeMap<String, AgentState>,
-    ) -> Result<(), String> {
+    fn write_agent_state(&self, room: &str, name: &str, state: &AgentState) -> Result<(), String> {
         let content =
-            serde_json::to_string_pretty(agents).map_err(|e| format!("agents 序列化失败: {e}"))?;
-        write_atomic(&self.agents_path(room)?, &(content + "\n"))
+            serde_json::to_string_pretty(state).map_err(|e| format!("Agent 序列化失败: {e}"))?;
+        write_atomic(&self.agent_path(room, name)?, &(content + "\n"))
+    }
+
+    fn migrate_agents_if_needed(&self, room: &str) -> Result<(), String> {
+        let legacy_path = self.legacy_agents_path(room)?;
+        if !legacy_path.exists() || !self.is_agents_dir_empty(room)? {
+            return Ok(());
+        }
+
+        let _lock = self.acquire_room_lock(room)?;
+        if !legacy_path.exists() || !self.is_agents_dir_empty(room)? {
+            return Ok(());
+        }
+
+        let content =
+            fs::read_to_string(&legacy_path).map_err(|e| format!("无法读取 agents.json: {e}"))?;
+        let agents = serde_json::from_str::<BTreeMap<String, AgentState>>(&content)
+            .map_err(|e| format!("agents.json 无效: {e}"))?;
+        for (name, state) in agents {
+            validate_segment(&name, "name")?;
+            self.write_agent_state(room, &name, &state)?;
+        }
+        fs::remove_file(&legacy_path).map_err(|e| format!("无法删除旧 agents.json: {e}"))?;
+        Ok(())
+    }
+
+    fn is_agents_dir_empty(&self, room: &str) -> Result<bool, String> {
+        let dir = self.agents_dir(room)?;
+        let mut entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+            Err(e) => return Err(format!("无法读取 Agent 目录: {e}")),
+        };
+        match entries.next() {
+            Some(Ok(_)) => Ok(false),
+            Some(Err(e)) => Err(format!("无法读取 Agent 文件: {e}")),
+            None => Ok(true),
+        }
     }
 
     fn acquire_room_lock(&self, room: &str) -> Result<RoomLock, String> {
@@ -217,17 +246,23 @@ impl ChatStore {
         fs::create_dir_all(&dir).map_err(|e| format!("无法创建房间目录: {e}"))?;
         let path = dir.join(".append.lock");
         let deadline = Instant::now() + Duration::from_secs(5);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| format!("无法打开消息写入锁: {e}"))?;
         loop {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(RoomLock { path }),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    remove_stale_lock(&path);
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(RoomLock { _file: file }),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         return Err("等待消息写入锁超时".to_string());
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
-                Err(e) => return Err(format!("无法创建消息写入锁: {e}")),
+                Err(e) => return Err(format!("无法获取消息写入锁: {e}")),
             }
         }
     }
@@ -237,11 +272,24 @@ impl ChatStore {
         Ok(self.root.join(room))
     }
 
-    fn messages_path(&self, room: &str) -> Result<PathBuf, String> {
+    pub fn messages_path(&self, room: &str) -> Result<PathBuf, String> {
         Ok(self.room_dir(room)?.join("messages.jsonl"))
     }
 
-    fn agents_path(&self, room: &str) -> Result<PathBuf, String> {
+    pub fn messages_dir(&self, room: &str) -> Result<PathBuf, String> {
+        self.room_dir(room)
+    }
+
+    fn agents_dir(&self, room: &str) -> Result<PathBuf, String> {
+        Ok(self.room_dir(room)?.join("agents"))
+    }
+
+    fn agent_path(&self, room: &str, name: &str) -> Result<PathBuf, String> {
+        validate_segment(name, "name")?;
+        Ok(self.agents_dir(room)?.join(format!("{name}.json")))
+    }
+
+    fn legacy_agents_path(&self, room: &str) -> Result<PathBuf, String> {
         Ok(self.room_dir(room)?.join("agents.json"))
     }
 }
@@ -311,6 +359,16 @@ fn validate_segment(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn empty_agent_state(name: &str) -> AgentState {
+    AgentState {
+        name: name.to_string(),
+        last_active_ts: 0,
+        lease_until_ts: 0,
+        cursor_offset: 0,
+        status: None,
+    }
+}
+
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("无法创建目录: {e}"))?;
@@ -354,21 +412,6 @@ fn read_jsonl_line<R: BufRead>(reader: &mut R) -> Result<Option<(Vec<u8>, usize,
         if newline.is_some() {
             return Ok(Some((line, bytes, is_too_long)));
         }
-    }
-}
-
-fn remove_stale_lock(path: &Path) {
-    let Ok(metadata) = fs::metadata(path) else {
-        return;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return;
-    };
-    let Ok(age) = modified.elapsed() else {
-        return;
-    };
-    if age > Duration::from_secs(30) {
-        let _ = fs::remove_file(path);
     }
 }
 
@@ -421,7 +464,10 @@ mod tests {
     fn rejects_oversized_message_line() {
         let (store, root) = temp_store();
         let err = store
-            .append_message("r1", &message("1", "A", &"x".repeat(MAX_MESSAGE_LINE_BYTES)))
+            .append_message(
+                "r1",
+                &message("1", "A", &"x".repeat(MAX_MESSAGE_LINE_BYTES)),
+            )
             .unwrap_err();
         assert!(err.contains("消息过长"));
         let _ = fs::remove_dir_all(root);
@@ -435,7 +481,12 @@ mod tests {
         let path = dir.join("messages.jsonl");
         let mut file = File::create(&path).unwrap();
         writeln!(file, "{}", "x".repeat(MAX_MESSAGE_LINE_BYTES + 1)).unwrap();
-        writeln!(file, "{}", serde_json::to_string(&message("1", "A", "ok")).unwrap()).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&message("1", "A", "ok")).unwrap()
+        )
+        .unwrap();
 
         let err = store.read_records_from("r1", 0).unwrap_err();
         assert!(err.contains("消息日志单行超过"));
@@ -458,8 +509,10 @@ mod tests {
             .unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].message.id, "2");
-        let agents_json = fs::read_to_string(root.join("r1").join("agents.json")).unwrap();
+        let agents_json =
+            fs::read_to_string(root.join("r1").join("agents").join("B.json")).unwrap();
         assert!(agents_json.contains("\"cursor_offset\""));
+        assert!(!root.join("r1").join("agents.json").exists());
         assert!(!root.join("r1").join("cursors").exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -485,10 +538,47 @@ mod tests {
             cursor_offset: 0,
             status: None,
         };
-        let mut agents = BTreeMap::new();
-        agents.insert("A".to_string(), state);
-        store.write_agents("r1", &agents).unwrap();
+        store.write_agent_state("r1", "A", &state).unwrap();
         assert!(!store.is_agent_online("r1", "A").unwrap());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrates_legacy_agents_json_to_agent_files() {
+        let (store, root) = temp_store();
+        let dir = root.join("r1");
+        fs::create_dir_all(&dir).unwrap();
+        let state = AgentState {
+            name: "A".to_string(),
+            last_active_ts: 1,
+            lease_until_ts: 2,
+            cursor_offset: 3,
+            status: Some("idle".to_string()),
+        };
+        let mut agents = BTreeMap::new();
+        agents.insert("A".to_string(), state.clone());
+        fs::write(
+            dir.join("agents.json"),
+            serde_json::to_string_pretty(&agents).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(store.read_agent_state("r1", "A").unwrap(), Some(state));
+        assert!(root.join("r1").join("agents").join("A.json").exists());
+        assert!(!root.join("r1").join("agents.json").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_agent_names_reads_agent_files() {
+        let (store, root) = temp_store();
+        store.refresh_lease("r1", "B", None).unwrap();
+        store.refresh_lease("r1", "A", None).unwrap();
+
+        assert_eq!(
+            store.list_agent_names("r1").unwrap(),
+            vec!["A".to_string(), "B".to_string()]
+        );
         let _ = fs::remove_dir_all(root);
     }
 

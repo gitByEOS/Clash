@@ -1,5 +1,11 @@
 # ChangeLog
 
+## v0.4.0
+
+- 新增 `clash chat` 跨会话协作命令
+- 支持 `send`、`watch`、`history` 消息流转
+- 支持 Agent 在线状态、游标续读和共享目录协作
+
 ## v0.3.1
 
 - 新增 `clash debug` 调试代理，通过 mock-ollama 记录 Claude 请求

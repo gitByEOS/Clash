@@ -171,7 +171,7 @@ clash chat history --path <路径|URI> --room <房间>
 ## 文件位置
 
 - 消息：`~/.config/clash/rooms/<room>/messages.jsonl`
-- Agent 状态和游标：`~/.config/clash/rooms/<room>/agents.json`
+- Agent 状态和游标：`~/.config/clash/rooms/<room>/agents/<name>.json`
 
 ## 规则
 

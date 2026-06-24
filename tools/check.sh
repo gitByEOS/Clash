@@ -9,6 +9,25 @@ info() { printf '\033[1;36m%s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m%s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
 
+run_step() {
+    local title="$1"
+    shift
+
+    local log
+    log="$(mktemp "${TMPDIR:-/tmp}/clash-check.XXXXXX")"
+    info "$title"
+    if "$@" >"$log" 2>&1; then
+        rm -f "$log"
+        return 0
+    fi
+
+    fail "$title 失败"
+    printf '%s\n' "---- ${title} 输出 ----" >&2
+    sed -n '1,200p' "$log" >&2
+    rm -f "$log"
+    return 1
+}
+
 find_cargo() {
     if command -v cargo >/dev/null 2>&1; then
         command -v cargo
@@ -30,17 +49,10 @@ main() {
 
     cd "$ROOT"
 
-    info "格式化 Rust 代码"
-    "$cargo" fmt
-
-    info "运行单元测试"
-    "$cargo" test
-
-    info "运行 Clippy"
-    "$cargo" clippy --all-targets -- -D warnings
-
-    info "构建 release"
-    "$cargo" build --release
+    run_step "格式化 Rust 代码" "$cargo" fmt
+    run_step "运行单元测试" "$cargo" test
+    run_step "运行 Clippy" "$cargo" clippy --all-targets -- -D warnings
+    run_step "构建 release" "$cargo" build --release
 
     ok "全部检查通过"
 }

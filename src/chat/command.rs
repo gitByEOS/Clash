@@ -2,9 +2,14 @@ use crate::chat::protocol::{
     build_wake_prompt, infer_target, should_handle, ChatMessage, DEFAULT_WATCH_TIMEOUT_SECS,
 };
 use crate::chat::store::{resolve_rooms_root, unix_millis, unix_secs, ChatStore};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::json;
+use std::path::Path;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const WATCH_LEASE_TICK_SECS: u64 = 15;
 
 pub fn do_chat(args: &[String]) -> Result<(), ()> {
     let result = match args.first().map(String::as_str) {
@@ -25,7 +30,13 @@ fn do_send(args: &[String]) -> Result<(), String> {
     let to = parsed.to.or_else(|| infer_target(&parsed.text));
     if let Some(target) = &to {
         if !target.eq_ignore_ascii_case("all") && !store.is_agent_online(&parsed.room, target)? {
-            return Err(format!("目标 @{target} 不在线"));
+            let known_agents = store.list_agent_names(&parsed.room)?;
+            let known = if known_agents.is_empty() {
+                String::new()
+            } else {
+                format!("，已知 Agent: {}", known_agents.join(", "))
+            };
+            return Err(format!("目标 @{target} 不在线{known}"));
         }
     }
 
@@ -52,35 +63,125 @@ fn do_watch(args: &[String]) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(parsed.timeout_secs);
     store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
 
+    if let Some(prompt) = check_watch_messages(&store, &parsed)? {
+        return finish_watch(&store, &parsed, prompt);
+    }
+
+    match create_message_watcher(&store, &parsed.room) {
+        Ok((watcher, watcher_rx)) => {
+            event_watch_loop(&store, &parsed, deadline, watcher, watcher_rx)
+        }
+        Err(_) => poll_watch_loop(&store, &parsed, deadline),
+    }
+}
+
+fn event_watch_loop(
+    store: &ChatStore,
+    parsed: &WatchArgs,
+    deadline: Instant,
+    _watcher: RecommendedWatcher,
+    watcher_rx: Receiver<notify::Result<Event>>,
+) -> Result<(), String> {
+    let messages_path = store.messages_path(&parsed.room)?;
     loop {
-        if let Some(expect) = &parsed.expect {
-            if !store.is_agent_online(&parsed.room, expect)? {
-                return Err(format!("目标 @{expect} 不在线"));
-            }
-        }
-
-        let cursor = store.read_cursor(&parsed.room, &parsed.name)?;
-        let records = store.read_records_from(&parsed.room, cursor)?;
-        let mut latest_offset = cursor;
-        for record in records {
-            latest_offset = record.end_offset;
-            if should_handle(&record.message, &parsed.name) {
-                store.write_cursor(&parsed.room, &parsed.name, record.end_offset)?;
-                println!("{}", build_wake_prompt(&record.message, &parsed.name));
-                store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
-                return Ok(());
-            }
-        }
-        if latest_offset != cursor {
-            store.write_cursor(&parsed.room, &parsed.name, latest_offset)?;
-        }
-
         if Instant::now() >= deadline {
             return Err("等待超时".to_string());
         }
-        store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
-        thread::sleep(Duration::from_millis(parsed.poll_ms));
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let wait = remaining.min(Duration::from_secs(WATCH_LEASE_TICK_SECS));
+        match watcher_rx.recv_timeout(wait) {
+            Ok(Ok(event)) => {
+                if !is_messages_event(&event, &messages_path) {
+                    continue;
+                }
+                if let Some(prompt) = check_watch_messages(store, parsed)? {
+                    return finish_watch(store, parsed, prompt);
+                }
+                store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
+            }
+            Ok(Err(_)) => {
+                if let Some(prompt) = check_watch_messages(store, parsed)? {
+                    return finish_watch(store, parsed, prompt);
+                }
+                store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
+            }
+            Err(RecvTimeoutError::Disconnected) => return poll_watch_loop(store, parsed, deadline),
+        }
     }
+}
+
+fn poll_watch_loop(store: &ChatStore, parsed: &WatchArgs, deadline: Instant) -> Result<(), String> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err("等待超时".to_string());
+        }
+
+        if let Some(prompt) = check_watch_messages(store, parsed)? {
+            return finish_watch(store, parsed, prompt);
+        }
+
+        store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        thread::sleep(remaining.min(Duration::from_millis(parsed.poll_ms)));
+    }
+}
+
+fn check_watch_messages(store: &ChatStore, parsed: &WatchArgs) -> Result<Option<String>, String> {
+    if let Some(expect) = &parsed.expect {
+        if !store.is_agent_online(&parsed.room, expect)? {
+            return Err(format!("目标 @{expect} 不在线"));
+        }
+    }
+
+    let cursor = store.read_cursor(&parsed.room, &parsed.name)?;
+    let records = store.read_records_from(&parsed.room, cursor)?;
+    let mut latest_offset = cursor;
+    for record in records {
+        latest_offset = record.end_offset;
+        if should_handle(&record.message, &parsed.name) {
+            store.write_cursor(&parsed.room, &parsed.name, record.end_offset)?;
+            return Ok(Some(build_wake_prompt(&record.message, &parsed.name)));
+        }
+    }
+    if latest_offset != cursor {
+        store.write_cursor(&parsed.room, &parsed.name, latest_offset)?;
+    }
+    Ok(None)
+}
+
+fn finish_watch(store: &ChatStore, parsed: &WatchArgs, prompt: String) -> Result<(), String> {
+    println!("{prompt}");
+    store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
+    Ok(())
+}
+
+fn create_message_watcher(
+    store: &ChatStore,
+    room: &str,
+) -> Result<(RecommendedWatcher, Receiver<notify::Result<Event>>), String> {
+    let (watcher_tx, watcher_rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |result| {
+        let _ = watcher_tx.send(result);
+    })
+    .map_err(|e| format!("无法初始化文件事件监听: {e}"))?;
+    watcher
+        .watch(&store.messages_dir(room)?, RecursiveMode::NonRecursive)
+        .map_err(|e| format!("无法监听消息目录: {e}"))?;
+    Ok((watcher, watcher_rx))
+}
+
+fn is_messages_event(event: &Event, messages_path: &Path) -> bool {
+    if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+        return false;
+    }
+    event.paths.iter().any(|path| {
+        path == messages_path
+            || path.file_name().and_then(|value| value.to_str()) == Some("messages.jsonl")
+    })
 }
 
 fn do_history(args: &[String]) -> Result<(), String> {
