@@ -5,7 +5,7 @@ use crate::cli::{print_cyan, print_green, print_red, print_yellow, ConfigSetArgs
 use crate::config::{self, ClashConfig, ConfigSlot};
 use crate::crypto;
 use crate::hooks;
-use crate::model::remove_size_marker;
+use crate::model::{context_size_marker, remove_size_marker};
 use crate::prompt_capture;
 use crate::statusline;
 use crate::tui;
@@ -715,19 +715,26 @@ fn select_debug_choice(args: &DebugArgs) -> Result<RunModelChoice, ()> {
     select_choice_from_list(choices)
 }
 
-fn set_claude_env(base_url: &str, auth_token: &str, model: &str) {
+fn set_claude_env(base_url: &str, auth_token: &str, model: &str, max_ctx: Option<u64>) {
     env::set_var("ANTHROPIC_BASE_URL", base_url);
     env::set_var("ANTHROPIC_AUTH_TOKEN", auth_token);
     env::set_var("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
     env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1");
     env::set_var("CLAUDE_CODE_ATTRIBUTION_HEADER", "0");
     env::set_var("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
+    env::set_var("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
+    env::set_var("ENABLE_TOOL_SEARCH", "false");
     env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", model);
     env::set_var("ANTHROPIC_MODEL", model);
     env::set_var("ANTHROPIC_SMALL_FAST_MODEL", model);
     env::set_var("ANTHROPIC_DEFAULT_SONNET_MODEL", model);
     env::set_var("ANTHROPIC_DEFAULT_OPUS_MODEL", model);
     env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", model);
+    if let Some(max_ctx) = max_ctx {
+        env::set_var("CLAUDE_CODE_MAX_CONTEXT_TOKENS", max_ctx.to_string());
+    } else {
+        env::remove_var("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+    }
 }
 
 fn claude_args(model: &str, extra_args: &[String]) -> Vec<String> {
@@ -953,7 +960,8 @@ pub fn do_debug(
     print_green(&format!("debug 代理已启动: {local_base_url}"));
     print_cyan(&format!("日志: {}", debug_log_path().display()));
 
-    set_claude_env(&local_base_url, "sk-clash-debug", &model);
+    let max_ctx = context_size_marker(&choice.model);
+    set_claude_env(&local_base_url, "sk-clash-debug", &model, max_ctx);
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();
     let cmd_args = claude_args(&model, &debug_args.claude_args);
@@ -985,9 +993,10 @@ fn launch_selected_claude(
         print_red("无法解密 API Key");
     })?;
 
-    let model = choice.model;
+    let model = remove_size_marker(&choice.model);
+    let max_ctx = context_size_marker(&choice.model);
 
-    set_claude_env(&choice.config.base_url, &auth_token, &model);
+    set_claude_env(&choice.config.base_url, &auth_token, &model, max_ctx);
 
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();

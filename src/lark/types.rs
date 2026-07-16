@@ -19,6 +19,7 @@ pub struct AgentConfig {
     pub base_url: String,
     pub auth_token: String,
     pub model: String,
+    pub max_ctx: Option<u64>,
     pub system_prompt_file: Option<String>,
 }
 

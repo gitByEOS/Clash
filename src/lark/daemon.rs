@@ -12,7 +12,7 @@ use crate::lark::lark_cli::{
 use crate::lark::types::{
     AgentConfig, ChatWorker, LarkChat, LarkMessage, LarkOptions, DEFAULT_CARD_UPDATE_THROTTLE_MS,
 };
-use crate::model::remove_size_marker;
+use crate::model::{context_size_marker, remove_size_marker};
 use std::collections::HashMap;
 use std::env;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -50,13 +50,16 @@ fn load_default_agent() -> Result<AgentConfig, String> {
     let slot = slots
         .first()
         .ok_or_else(|| "未找到 Clash 配置，请先运行 clash config".to_string())?;
-    let model = slot
+    let configured_model = slot
         .config
         .models
         .first()
-        .map(|m| remove_size_marker(m))
-        .filter(|m| !m.is_empty())
         .ok_or_else(|| "默认账户没有可用模型".to_string())?;
+    let max_ctx = context_size_marker(configured_model);
+    let model = remove_size_marker(configured_model);
+    if model.is_empty() {
+        return Err("默认账户没有可用模型".to_string());
+    }
     let auth_token = crypto::decrypt_token(&slot.config.auth_token_encrypted)
         .map_err(|_| "无法解密 API Key".to_string())?;
     let system_prompt_file = config::read_system_prompt()
@@ -66,6 +69,7 @@ fn load_default_agent() -> Result<AgentConfig, String> {
         base_url: slot.config.base_url.clone(),
         auth_token,
         model,
+        max_ctx,
         system_prompt_file,
     })
 }

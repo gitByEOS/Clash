@@ -118,6 +118,13 @@ fn format_context_size(size: u64) -> String {
     }
 }
 
+fn configured_context_size() -> Option<u64> {
+    env::var("CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|&size| size > 0)
+}
+
 fn color_for_pct(pct: u64) -> &'static str {
     if pct >= 90 {
         "\x1b[1;31m" // red
@@ -191,7 +198,10 @@ pub(crate) fn do_statusline() {
         current_usage: None,
     });
 
-    let size = ctx.context_window_size.unwrap_or(200_000);
+    // Clash 从模型名的 `[353k]` 后缀设置该环境变量。优先使用它，避免兼容端点
+    // 在 statusline 输入中仍报告默认的 200k。
+    let size =
+        configured_context_size().unwrap_or_else(|| ctx.context_window_size.unwrap_or(200_000));
     let usage = ctx.current_usage.unwrap_or(StatuslineUsage {
         input_tokens: Some(0),
         cache_creation_input_tokens: Some(0),

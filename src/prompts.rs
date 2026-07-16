@@ -64,8 +64,8 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
 3. 分批派发任务
   - 等待 A 完成 → 验收 → 标记 completed
   - 第2批: 并行派发 B 和 C
-    - Agent({subagent_type: "general-purpose", model: "sonnet", team_name, name: "B", prompt})
-    - Agent({subagent_type: "general-purpose", model: "sonnet", team_name, name: "C", prompt})
+    - Agent({subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", team_name, name: "B", prompt})
+    - Agent({subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", team_name, name: "C", prompt})
 
 4. 验收
   - 读取 Subagent 产出的文件验证内容
@@ -91,12 +91,12 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
 
 ## 派发规则
 
-### model 参数
+### model 与 mode 参数
 
 必须显式指定：
 
 ```
-Agent({model: "sonnet"})
+Agent({model: "sonnet", mode: "bypassPermissions"})
 ```
 
 ### 可信度矩阵

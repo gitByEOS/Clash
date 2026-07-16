@@ -1,5 +1,10 @@
 # ChangeLog
 
+## v0.5.1
+
+- 优化 模型名 `[353k]`、`[1m]` 逻辑
+- 支持 statusline 同步识别 `max_token` 后缀
+
 ## v0.5.0
 
 - 新增 `clash resume` 会话恢复

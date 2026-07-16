@@ -51,6 +51,11 @@ impl ClaudeSession {
 
         let mut command = Command::new(&claude_path);
         command.args(&args);
+        if let Some(max_ctx) = agent.max_ctx {
+            command.env("CLAUDE_CODE_MAX_CONTEXT_TOKENS", max_ctx.to_string());
+        } else {
+            command.env_remove("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+        }
 
         let mut child = command
             .env("ANTHROPIC_BASE_URL", &agent.base_url)
@@ -59,6 +64,8 @@ impl ClaudeSession {
             .env("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")
             .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
             .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+            .env("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1")
+            .env("ENABLE_TOOL_SEARCH", "false")
             .env("CLAUDE_CODE_SUBAGENT_MODEL", &agent.model)
             .env("ANTHROPIC_MODEL", &agent.model)
             .env("ANTHROPIC_SMALL_FAST_MODEL", &agent.model)
