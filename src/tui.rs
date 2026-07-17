@@ -692,6 +692,7 @@ fn render_resume_header(
     finish_line(out);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_resume_row(
     out: &mut impl Write,
     session: Option<&ClaudeSession>,

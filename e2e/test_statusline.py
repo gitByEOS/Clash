@@ -13,6 +13,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASH_BIN = ROOT / "target" / "debug" / "clash"
+CONTEXT_SIZE_ENV = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+
+
+def isolated_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    result = (os.environ if env is None else env).copy()
+    if env is None:
+        result.pop(CONTEXT_SIZE_ENV, None)
+    return result
 
 
 def strip_ansi(text: str) -> str:
@@ -23,7 +31,7 @@ def run_statusline(stdin: str, env: dict[str, str] | None = None, show: bool = F
     proc = subprocess.run(
         [str(CLASH_BIN), "statusline"],
         cwd=ROOT,
-        env=env or os.environ.copy(),
+        env=isolated_env(env),
         input=stdin,
         text=True,
         capture_output=True,
@@ -58,6 +66,23 @@ def test_statusline_basic_json() -> None:
     assert "Clash" in out
 
 
+def test_statusline_configured_context_override() -> None:
+    """Clash 配置的上下文窗口覆盖端点报告值"""
+    data = {
+        "model": {"display_name": "glm-5"},
+        "context_window": {
+            "context_window_size": 200000,
+            "current_usage": {"input_tokens": 52000},
+        },
+    }
+    env = isolated_env()
+    env[CONTEXT_SIZE_ENV] = "353000"
+    code, out = run_statusline(json.dumps(data), env=env, show=True)
+    assert code == 0
+    assert "14%" in out
+    assert "353k" in out
+
+
 def test_statusline_size_marker_removed() -> None:
     """模型名中的 [size] 标记被去除"""
     data = {
@@ -86,6 +111,7 @@ def test_statusline_high_percentage_color() -> None:
     proc = subprocess.run(
         [str(CLASH_BIN), "statusline"],
         cwd=ROOT,
+        env=isolated_env(),
         input=json.dumps(data),
         text=True,
         capture_output=True,
@@ -146,13 +172,13 @@ def test_statusline_format() -> None:
 
 def test_statusline_progress_colors() -> None:
     """进度条颜色覆盖所有级别"""
-    sizes = [
-        (10, "green"),    # < 50%
-        (55, "orange"),   # 50-70%
-        (75, "yellow"),   # 70-90%
-        (95, "red"),      # >= 90%
+    cases = [
+        (10, "\x1b[1;32m"),  # < 50%
+        (55, "\x1b[1;35m"),  # 50-70%
+        (75, "\x1b[1;33m"),  # 70-90%
+        (95, "\x1b[1;31m"),  # >= 90%
     ]
-    for pct, _ in sizes:
+    for pct, color in cases:
         data = {
             "model": {"display_name": f"test-{pct}pct"},
             "context_window": {
@@ -163,11 +189,15 @@ def test_statusline_progress_colors() -> None:
         proc = subprocess.run(
             [str(CLASH_BIN), "statusline"],
             cwd=ROOT,
+            env=isolated_env(),
             input=json.dumps(data),
             text=True,
             capture_output=True,
         )
         print(f"  {pct}% raw: {proc.stdout.strip()}")
+        assert proc.returncode == 0
+        assert f"{pct}%" in strip_ansi(proc.stdout)
+        assert color in proc.stdout
 
 
 def test_auto_config_statusline() -> None:
@@ -295,6 +325,7 @@ def main() -> int:
     tests = [
         test_statusline_empty_input,
         test_statusline_basic_json,
+        test_statusline_configured_context_override,
         test_statusline_size_marker_removed,
         test_statusline_high_percentage_color,
         test_statusline_session_duration,

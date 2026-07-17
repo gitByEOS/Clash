@@ -53,7 +53,16 @@ pub fn load_sessions_from(
 }
 
 pub fn project_dir_name(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "-")
+    path.to_string_lossy()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn claude_projects_dir() -> PathBuf {
@@ -139,7 +148,7 @@ struct SessionDraft {
     project: String,
     path: PathBuf,
     messages: Vec<String>,
-    has_assistant_text: bool,
+    has_assistant_message: bool,
 }
 
 impl SessionDraft {
@@ -159,7 +168,7 @@ impl SessionDraft {
             project,
             path: path.to_path_buf(),
             messages: Vec::new(),
-            has_assistant_text: false,
+            has_assistant_message: false,
         }
     }
 
@@ -199,6 +208,9 @@ impl SessionDraft {
     }
 
     fn push_message(&mut self, value: &Value, is_assistant: bool) {
+        if is_assistant {
+            self.has_assistant_message = true;
+        }
         let Some(message) = value.get("message") else {
             return;
         };
@@ -209,16 +221,13 @@ impl SessionDraft {
         for text in extract_text_content(content) {
             let text = clean_block(&text);
             if !text.is_empty() {
-                if is_assistant {
-                    self.has_assistant_text = true;
-                }
                 self.messages.push(text);
             }
         }
     }
 
     fn build(self) -> Option<ClaudeSession> {
-        if !self.has_assistant_text {
+        if !self.has_assistant_message {
             return None;
         }
         let id = self.id.or_else(|| file_stem(&self.path))?;
@@ -304,6 +313,16 @@ mod tests {
         assert_eq!(
             project_dir_name(Path::new("/Users/bole/dev/Clash")),
             "-Users-bole-dev-Clash"
+        );
+        assert_eq!(
+            project_dir_name(Path::new(
+                "/Users/bole/dev/ai_group_tools/tool-dongqing-prd-workshop"
+            )),
+            "-Users-bole-dev-ai-group-tools-tool-dongqing-prd-workshop"
+        );
+        assert_eq!(
+            project_dir_name(Path::new("/tmp/a_b.c d+e@f#中文%[x]-9")),
+            "-tmp-a-b-c-d-e-f-----x--9"
         );
     }
 
@@ -398,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_sessions_without_assistant_text() {
+    fn filters_sessions_without_assistant_messages() {
         let root = temp_root("empty_session");
         let current = Path::new("/tmp/clash");
         let project = root.join(project_dir_name(current));
@@ -406,6 +425,13 @@ mod tests {
         write_jsonl(
             &project.join("empty.jsonl"),
             &[r#"{"type":"user","message":{"content":"只有用户消息"},"sessionId":"empty"}"#],
+        );
+        write_jsonl(
+            &project.join("tool-only.jsonl"),
+            &[
+                r#"{"type":"user","message":{"content":"排查问题"},"sessionId":"tool-only"}"#,
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]},"sessionId":"tool-only"}"#,
+            ],
         );
         write_jsonl(
             &project.join("ok.jsonl"),
@@ -416,8 +442,9 @@ mod tests {
         );
 
         let sessions = load_sessions_from(&root, current, SessionScope::CurrentProject).unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "ok");
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.iter().any(|session| session.id == "ok"));
+        assert!(sessions.iter().any(|session| session.id == "tool-only"));
         let _ = fs::remove_dir_all(root);
     }
 

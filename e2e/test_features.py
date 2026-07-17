@@ -139,6 +139,8 @@ def main() -> int:
 
     log("test resume tui")
     prepare_resume_history(env, artifact_dir)
+    test_resume_project_path_encoding(env, artifact_dir)
+    results.append("- resume 按 Claude 规则编码下划线等项目路径字符")
     resume_raw, resume_screen = capture_frame(env, ["clash", "resume"], until=b"resume-current")
     assert_resume_tui_current(resume_screen)
     results.append("- clash resume 默认显示当前项目会话和右侧历史")
@@ -222,12 +224,13 @@ def capture_frame(
     cmd: list[str],
     keys: list[bytes] | None = None,
     until: bytes | None = None,
+    cwd: Path = ROOT,
 ) -> tuple[bytes, shared.TerminalScreen]:
     keys = keys or []
     until = until or b"qwen-max"
     pid, master = os.forkpty()
     if pid == 0:
-        os.chdir(ROOT)
+        os.chdir(cwd)
         os.execve(str(CLASH_BIN), cmd, env)
 
     shared.set_winsize(master)
@@ -278,6 +281,29 @@ def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
         ],
     )
     write_jsonl(
+        current_project / "tool-only-session.jsonl",
+        [
+            {
+                "type": "user",
+                "message": {"role": "user", "content": "tool-only request"},
+                "timestamp": "2026-06-24T09:30:00.000Z",
+                "cwd": str(ROOT),
+                "sessionId": "tool-only-session",
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "model": "qwen3.6-plus",
+                    "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "pwd"}}],
+                },
+                "timestamp": "2026-06-24T09:31:00.000Z",
+                "sessionId": "tool-only-session",
+            },
+            {"type": "ai-title", "aiTitle": "resume-tool-only", "sessionId": "tool-only-session"},
+        ],
+    )
+    write_jsonl(
         current_project / "second-session.jsonl",
         [
             {
@@ -311,7 +337,41 @@ def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
 
 
 def encode_project_dir(path: Path) -> str:
-    return str(path).replace("/", "-")
+    return "".join(char if char.isascii() and (char.isalnum() or char == "-") else "-" for char in str(path))
+
+
+def test_resume_project_path_encoding(env: dict[str, str], artifact_dir: Path) -> None:
+    encoded_cwd = artifact_dir / "project_with_underscores"
+    encoded_cwd.mkdir(parents=True, exist_ok=True)
+    project_dir = Path(env["HOME"]) / ".claude" / "projects" / encode_project_dir(encoded_cwd)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(
+        project_dir / "encoded-session.jsonl",
+        [
+            {
+                "type": "user",
+                "message": {"role": "user", "content": "encoded project body"},
+                "cwd": str(encoded_cwd),
+                "sessionId": "encoded-session",
+            },
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": "encoded assistant reply"},
+                "sessionId": "encoded-session",
+            },
+            {"type": "ai-title", "aiTitle": "encoded-project-title", "sessionId": "encoded-session"},
+        ],
+    )
+
+    _, screen = capture_frame(
+        env,
+        ["clash", "resume"],
+        until=b"encoded-project-title",
+        cwd=encoded_cwd,
+    )
+    lines = screen.semantic_lines()
+    shared.assert_contains(lines, "[当前项目]")
+    shared.assert_contains(lines, "encoded-project-title")
 
 
 def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
@@ -429,6 +489,7 @@ def assert_resume_tui_current(screen: shared.TerminalScreen) -> None:
     assert_resume_prompt(lines)
     shared.assert_contains(lines, "[当前项目]")
     shared.assert_contains(lines, "resume-current")
+    shared.assert_contains(lines, "resume-tool-only")
     shared.assert_not_contains(lines, "current-session")
     shared.assert_contains(lines, "resume-current unique body")
     shared.assert_contains(lines, "对话历史")
