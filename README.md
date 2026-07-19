@@ -38,7 +38,7 @@
 VS Code 为例：
 ![lauch](docs/clash-launch.png)
 
-![session](docs/session-search.png)
+![session](docs/session-resume.png)
 
 ## 平台支持
 
