@@ -86,9 +86,12 @@ clash config --url https://api.example.com/anthropic
 clash config --key sk-xxx
 clash config --models model-a,model-b
 clash config --idx 1 --url https://api.other.com/anthropic
+clash config --idx 1 --effort high
 ```
 
 Rust 版支持多账户配置槽：`--idx 0` 写入 `auth`，`--idx 1` 写入 `auth1`，以此类推。`clash run` 会读取所有账户并合并模型列表。
+
+启动 Claude 默认传入 `--effort high`。可通过 `clash config --idx N --effort <low|medium|high|xhigh|max>` 为账户单独设置推理深度；该账户启动时会使用设置值。
 
 写入配置后会自动对该账户的 `MODELS` 列表逐个执行连通测试（等同 `clash test --idx n`）。跳过：`CLASH_SKIP_AUTO_TEST=1`。
 

@@ -33,6 +33,9 @@ Windows 从 `v0.1.5` 起使用 Rust `clash.exe`，不再维护 PowerShell 业务
 | `config --url URL` | 部分 URL 更新 | ✅ | ✅ | |
 | `config --key KEY` | 部分 Key 更新 | ✅ | ✅ | |
 | `config --models MODELS` | 部分 models 更新 | ✅ | ✅ | |
+| `config --idx N --effort VALUE` | 按账户保存推理深度 | ✅ | ✅ | `VALUE` 为 `low`、`medium`、`high`、`xhigh` 或 `max`；默认 `high` |
+| `config --effort max` + `run` | 启动透传账户推理深度 | ✅ | ✅ | 假 Claude 断言真实参数为 `--effort max`，随后恢复 `high` |
+| `config --effort invalid` | 非法推理深度拒绝 | ✅ | ✅ | 空值、大小写变体与未支持值均拒绝，且不修改已有配置 |
 | `config --models " , "` | 空模型列表拒绝 | ✅ | ✅ | |
 | `config --idx abc` | 非法 idx 拒绝 | ✅ | ✅ | |
 | 交互式配置向导 | stdin 输入 URL/Key/Models | ✅ | ✅ | 配置不存在时触发 |

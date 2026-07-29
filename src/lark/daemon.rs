@@ -69,6 +69,7 @@ fn load_default_agent() -> Result<AgentConfig, String> {
         base_url: slot.config.base_url.clone(),
         auth_token,
         model,
+        effort: slot.config.effort.clone(),
         max_ctx,
         system_prompt_file,
     })

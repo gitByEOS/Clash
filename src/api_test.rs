@@ -237,6 +237,7 @@ mod tests {
             command: "clash".to_string(),
             models: vec!["a".into(), "b".into()],
             name: None,
+            effort: "high".to_string(),
         };
         let opts = TestOptions {
             idx: Some(0),
@@ -255,6 +256,7 @@ mod tests {
             command: "clash".to_string(),
             models: vec!["qwen3.7-plus[1m]".into(), "glm-5".into()],
             name: None,
+            effort: "high".to_string(),
         };
         let opts = TestOptions {
             idx: Some(0),

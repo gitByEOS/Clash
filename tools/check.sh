@@ -5,7 +5,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-info() { printf '\033[1;36m%s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m%s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
 
@@ -15,7 +14,6 @@ run_step() {
 
     local log
     log="$(mktemp "${TMPDIR:-/tmp}/clash-check.XXXXXX")"
-    info "$title"
     if "$@" >"$log" 2>&1; then
         rm -f "$log"
         return 0

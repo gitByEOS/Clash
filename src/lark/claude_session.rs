@@ -30,7 +30,7 @@ impl ClaudeSession {
             "--permission-mode".to_string(),
             "bypassPermissions".to_string(),
             "--effort".to_string(),
-            "max".to_string(),
+            agent.effort.clone(),
             "--model".to_string(),
             agent.model.clone(),
             "--input-format".to_string(),

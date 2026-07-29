@@ -126,6 +126,7 @@ fn save_config(
         command: "clash".to_string(),
         models,
         name,
+        effort: "high".to_string(),
     };
 
     config::write_config_for_idx(idx, &cfg).map_err(|_| ())?;
@@ -182,6 +183,7 @@ fn load_config_for_update(idx: usize) -> Result<ClashConfig, ()> {
             command: "clash".to_string(),
             models: vec![],
             name: None,
+            effort: "high".to_string(),
         }),
         Err(_) => Err(()),
     }
@@ -195,15 +197,24 @@ pub fn do_config(
     _print_cyan: fn(&str),
     parse_fn: fn(&[String]) -> Result<ConfigSetArgs, ()>,
 ) -> Result<(), ()> {
+    let parsed = if args.is_empty() {
+        None
+    } else {
+        Some(parse_fn(args)?)
+    };
+
     statusline::ensure_statusline_config();
     config::ensure_system_prompt_file();
 
-    if args.is_empty() {
+    let Some(parsed) = parsed else {
         return do_config_show(0);
-    }
+    };
 
-    let parsed = parse_fn(args)?;
-    if parsed.base_url.is_none() && parsed.auth_key.is_none() && parsed.models.is_none() {
+    if parsed.base_url.is_none()
+        && parsed.auth_key.is_none()
+        && parsed.models.is_none()
+        && parsed.effort.is_none()
+    {
         return match do_config_show(parsed.idx) {
             Ok(()) => Ok(()),
             Err(()) => do_configure_interactive_for_idx(parsed.idx),
@@ -211,6 +222,8 @@ pub fn do_config(
     }
 
     let mut cfg = load_config_for_update(parsed.idx)?;
+    let should_auto_test =
+        parsed.base_url.is_some() || parsed.auth_key.is_some() || parsed.models.is_some();
 
     if let Some(base_url) = parsed.base_url {
         cfg.base_url = base_url;
@@ -226,6 +239,11 @@ pub fn do_config(
         }
         cfg.models = models;
     }
+    if let Some(effort) = parsed.effort {
+        cfg.effort = config::validate_effort(&effort).map_err(|msg| {
+            print_red(msg);
+        })?;
+    }
 
     config::write_config_for_idx(parsed.idx, &cfg).map_err(|_| ())?;
     let config_path = config::config_path_for_idx(parsed.idx);
@@ -233,7 +251,11 @@ pub fn do_config(
     if !cfg.auth_token_encrypted.is_empty() {
         print_green("API Key 已加密存储");
     }
-    auto_test_after_config(parsed.idx)
+    if should_auto_test {
+        auto_test_after_config(parsed.idx)
+    } else {
+        Ok(())
+    }
 }
 
 fn do_config_show(idx: usize) -> Result<(), ()> {
@@ -267,6 +289,7 @@ fn do_config_show(idx: usize) -> Result<(), ()> {
     }
 
     println!("COMMAND={}", cfg.command);
+    println!("EFFORT={}", cfg.effort);
     println!("MODELS=<<MODELS");
     for model in &cfg.models {
         println!("{}", model);
@@ -737,13 +760,13 @@ fn set_claude_env(base_url: &str, auth_token: &str, model: &str, max_ctx: Option
     }
 }
 
-fn claude_args(model: &str, extra_args: &[String]) -> Vec<String> {
+fn claude_args(model: &str, effort: &str, extra_args: &[String]) -> Vec<String> {
     let system_prompt = config::read_system_prompt();
     let mut cmd_args: Vec<String> = vec![
         "--permission-mode".to_string(),
         "bypassPermissions".to_string(),
         "--effort".to_string(),
-        "max".to_string(),
+        effort.to_string(),
         "--model".to_string(),
         model.to_string(),
     ];
@@ -964,7 +987,7 @@ pub fn do_debug(
     set_claude_env(&local_base_url, "sk-clash-debug", &model, max_ctx);
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();
-    let cmd_args = claude_args(&model, &debug_args.claude_args);
+    let cmd_args = claude_args(&model, &choice.config.effort, &debug_args.claude_args);
 
     let status = process::Command::new(&claude_path)
         .args(&cmd_args)
@@ -1001,7 +1024,7 @@ fn launch_selected_claude(
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();
 
-    let cmd_args = claude_args(&model, extra_args);
+    let cmd_args = claude_args(&model, &choice.config.effort, extra_args);
 
     #[cfg(unix)]
     {

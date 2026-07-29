@@ -1,4 +1,5 @@
 use crate::chat::do_chat;
+use crate::config;
 use crate::lark;
 use crate::ops::{
     do_config, do_debug, do_hooks, do_prompts, do_rename, do_reset, do_resume, do_select_and_run,
@@ -51,6 +52,7 @@ pub struct ConfigSetArgs {
     pub base_url: Option<String>,
     pub auth_key: Option<String>,
     pub models: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// 通用参数解析：遍历 args，遇 --xxx 取下一元素为值
@@ -92,17 +94,30 @@ pub fn parse_idx(value: &str) -> Result<usize, ()> {
 }
 
 pub fn parse_config_set_args(args: &[String]) -> Result<ConfigSetArgs, ()> {
-    let map = parse_auth_args(args, &["--idx", "--url", "--key", "--models"], true)?;
+    let map = parse_auth_args(
+        args,
+        &["--idx", "--url", "--key", "--models", "--effort"],
+        true,
+    )?;
     let idx = map
         .get("--idx")
         .map(|value| parse_idx(value))
         .transpose()?
         .unwrap_or(0);
+    let effort = map
+        .get("--effort")
+        .map(|value| {
+            config::validate_effort(value).map_err(|msg| {
+                print_red(msg);
+            })
+        })
+        .transpose()?;
     Ok(ConfigSetArgs {
         idx,
         base_url: map.get("--url").cloned(),
         auth_key: map.get("--key").cloned(),
         models: map.get("--models").cloned(),
+        effort,
     })
 }
 
@@ -185,5 +200,25 @@ pub fn launch() {
             print_yellow,
             print_cyan,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_config_set_args_accepts_valid_effort() {
+        let args = vec!["--effort".to_string(), "xhigh".to_string()];
+        assert_eq!(
+            parse_config_set_args(&args).unwrap().effort.as_deref(),
+            Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn parse_config_set_args_rejects_invalid_effort() {
+        let args = vec!["--effort".to_string(), "invalid".to_string()];
+        assert!(parse_config_set_args(&args).is_err());
     }
 }

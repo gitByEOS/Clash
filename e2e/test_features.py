@@ -42,6 +42,22 @@ def main() -> int:
     shared.test_version(env)
     results.append("- version 输出以 v 开头的版本号")
 
+    log("test invalid effort has no file side effects")
+    side_effect_env = env.copy()
+    side_effect_home = artifact_dir / "invalid-effort-home"
+    side_effect_config_home = artifact_dir / "invalid-effort-config-home"
+    side_effect_env["HOME"] = str(side_effect_home)
+    side_effect_env[shared.CONFIG_HOME_ENV] = str(side_effect_config_home)
+    side_effect_env["XDG_CONFIG_HOME"] = str(side_effect_config_home)
+    side_effect_env["CLAUDE_CONFIG_DIR"] = str(artifact_dir / "invalid-effort-claude-config")
+    shared.test_invalid_effort_has_no_file_side_effects(
+        side_effect_env,
+        side_effect_home,
+        side_effect_config_home,
+        Path(side_effect_env["CLAUDE_CONFIG_DIR"]),
+    )
+    results.append("- 非法 config --effort 不创建配置、系统提示或状态栏文件")
+
     log("test config idx0 set")
     shared.test_config_set(env, 0, shared.BASE_URL, shared.API_KEY, shared.MODELS)
     results.append("- config --idx 0 写入 auth")
@@ -49,6 +65,28 @@ def main() -> int:
     log("test config idx0 show")
     shared.test_config_show(env, 0, shared.BASE_URL, shared.MODELS)
     results.append("- config --idx 0 展示 BASE_URL 与模型")
+
+    log("test default effort")
+    shared.test_run_exec_env(env, expected_base=shared.BASE_URL)
+    results.append("- 未设置账户推理深度时，启动 Claude 默认传入 --effort high")
+
+    log("test valid effort values")
+    shared.test_effort_values(env)
+    results.append("- config --effort 接受 low / medium / high / xhigh / max")
+
+    log("test effort update skips auto test")
+    shared.test_config_effort_skips_auto_test(env, 0)
+    results.append("- 仅更新 config --effort 不触发 API 连通测试")
+
+    log("test configured effort run")
+    shared.test_config_effort(env, 0, "max")
+    shared.test_run_exec_env(env, expected_base=shared.BASE_URL, expected_effort="max")
+    shared.test_config_effort(env, 0, "high")
+    results.append("- 账户设为 max 时 run 透传 --effort max，随后恢复 high")
+
+    log("test invalid effort")
+    shared.test_invalid_effort(env)
+    results.append("- config --effort 非法值失败")
 
     log("test single account run before idx1")
     single_raw, single_screen = capture_frame(env, ["clash"])
@@ -62,6 +100,10 @@ def main() -> int:
     log("test config idx1 show")
     shared.test_config_show(env, 1, shared.ALT_BASE_URL, shared.ALT_MODELS)
     results.append("- config --idx 1 展示独立账户")
+
+    log("test config idx1 effort")
+    shared.test_config_effort(env, 1, "high")
+    results.append("- config --idx 1 --effort high 按账户保存")
 
     log("test config partial update")
     shared.test_config_partial_update(env)
@@ -273,7 +315,7 @@ def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
             },
             {
                 "type": "assistant",
-                "message": {"role": "assistant", "model": "qwen3.6-plus", "content": [{"type": "text", "text": "右侧历史 preview"}]},
+                "message": {"role": "assistant", "model": "glm-5.2", "content": [{"type": "text", "text": "右侧历史 preview"}]},
                 "timestamp": "2026-06-24T10:01:00.000Z",
                 "sessionId": "current-session",
             },
@@ -294,7 +336,7 @@ def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "model": "qwen3.6-plus",
+                    "model": "glm-5.2",
                     "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "pwd"}}],
                 },
                 "timestamp": "2026-06-24T09:31:00.000Z",
@@ -327,7 +369,7 @@ def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
             },
             {
                 "type": "assistant",
-                "message": {"role": "assistant", "model": "qwen3.6-plus", "content": "other assistant reply"},
+                "message": {"role": "assistant", "model": "glm-5.2", "content": "other assistant reply"},
                 "timestamp": "2026-06-24T11:01:00.000Z",
                 "sessionId": "other-session",
             },

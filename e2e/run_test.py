@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = ROOT / "e2e" / "artifacts"
 CLASH_BIN = ROOT / "target" / "release" / "clash"
 CONFIG_HOME_ENV = "CLASH_TEST_CONFIG_HOME"
-MODELS = ["qwen3.6-plus", "glm-5", "kimi-k2"]
+MODELS = ["glm-5.2", "glm-5", "kimi-k2"]
 ALT_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash", "qwen-max"]
 BASE_URL = "http://example.test/anthropic"
 ALT_BASE_URL = "http://alt.example.test/anthropic"
@@ -241,6 +241,59 @@ def test_config_show(env: dict[str, str], idx: int, base_url: str, models: list[
         assert model in result.stdout
 
 
+def test_config_effort(env: dict[str, str], idx: int, effort: str) -> None:
+    result = run_clash(["config", "--idx", str(idx), "--effort", effort], env)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    config = config_path(config_home(env), idx).read_text(encoding="utf-8")
+    assert f"EFFORT={effort}" in config, config
+
+    show = run_clash(["config", "--idx", str(idx)], env)
+    assert show.returncode == 0, show.stderr or show.stdout
+    assert f"EFFORT={effort}" in show.stdout
+
+
+def test_config_effort_skips_auto_test(env: dict[str, str], idx: int) -> None:
+    run_env = env.copy()
+    run_env.pop("CLASH_SKIP_AUTO_TEST", None)
+
+    result = run_clash(["config", "--idx", str(idx), "--effort", "medium"], run_env)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "正在进行 Anthropic 兼容 API 连通测试" not in result.stdout
+
+    config = config_path(config_home(env), idx).read_text(encoding="utf-8")
+    assert "EFFORT=medium" in config, config
+
+
+def test_effort_values(env: dict[str, str]) -> None:
+    valid_efforts = ["low", "medium", "high", "xhigh", "max"]
+    for effort in valid_efforts:
+        test_config_effort(env, 0, effort)
+    test_config_effort(env, 0, "high")
+
+
+def test_invalid_effort(env: dict[str, str]) -> None:
+    config_file = config_path(config_home(env), 0)
+    before = config_file.read_text(encoding="utf-8")
+    for effort in ["invalid", "", "HIGH", "extra-high"]:
+        result = run_clash(["config", "--effort", effort], env, check=False)
+        assert result.returncode != 0
+        assert config_file.read_text(encoding="utf-8") == before
+
+
+def test_invalid_effort_has_no_file_side_effects(
+    env: dict[str, str],
+    home: Path,
+    config_home_path: Path,
+    claude_config_dir: Path,
+) -> None:
+    result = run_clash(["config", "--effort", "invalid"], env, check=False)
+    assert result.returncode != 0
+    assert not home.exists()
+    assert not config_home_path.exists()
+    assert not claude_config_dir.exists()
+
+
 def test_config_partial_update(env: dict[str, str]) -> None:
     updated_url = "http://updated.example/anthropic"
     result = run_clash(["config", "--url", updated_url], env)
@@ -257,7 +310,7 @@ def test_config_partial_update(env: dict[str, str]) -> None:
     assert result.returncode == 0, result.stderr or result.stdout
     show = run_clash(["config"], env)
     assert "glm-5" in show.stdout
-    assert "qwen3.6-plus" not in show.stdout
+    assert "glm-5.2" not in show.stdout
     idx1 = run_clash(["config", "--idx", "1"], env)
     assert f"BASE_URL={ALT_BASE_URL}" in idx1.stdout
     assert ALT_MODELS[0] in idx1.stdout
@@ -389,7 +442,7 @@ def test_connection(env: dict[str, str]) -> None:
         result = run_clash(["test"], env)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "全部通过" in result.stdout
-        assert "qwen3.6-plus 通过" in result.stdout
+        assert "glm-5.2 通过" in result.stdout
         assert "glm-5 通过" in result.stdout
         assert "kimi-k2 通过" in result.stdout
 
@@ -398,7 +451,7 @@ def test_connection(env: dict[str, str]) -> None:
         assert "deepseek-v4-pro 通过" in result.stdout
         assert "deepseek-v4-flash 通过" in result.stdout
         assert "qwen-max 通过" in result.stdout
-        assert "qwen3.6-plus 通过" not in result.stdout
+        assert "glm-5.2 通过" not in result.stdout
     finally:
         server.shutdown()
         thread.join(timeout=2)
@@ -408,7 +461,8 @@ def test_run_exec_env(
     env: dict[str, str],
     *,
     expected_base: str = "http://127.0.0.1",
-    expected_model: str = "qwen3.6-plus",
+    expected_model: str = "glm-5.2",
+    expected_effort: str = "high",
 ) -> CliResult:
     with tempfile.TemporaryDirectory(prefix="clash-e2e-bin-") as bin_dir:
         claude = Path(bin_dir) / "claude"
@@ -432,6 +486,7 @@ def test_run_exec_env(
     assert f"MODEL={expected_model}" in result.stdout
     # ARGS 包含基本参数，但不需要 --smoke
     assert "--permission-mode bypassPermissions" in result.stdout
+    assert f"--effort {expected_effort}" in result.stdout
     return result
 
 
@@ -447,10 +502,10 @@ def test_removed_commands(env: dict[str, str]) -> None:
         change_token = run_clash(["change-token", "sk-new"], run_env)
 
     assert add_model.returncode == 0
-    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus" in add_model.stdout
+    assert "ARGS=--permission-mode bypassPermissions --effort high --model glm-5.2" in add_model.stdout
     assert "add-model new-model" in add_model.stdout
     assert change_token.returncode == 0
-    assert "ARGS=--permission-mode bypassPermissions --effort max --model qwen3.6-plus" in change_token.stdout
+    assert "ARGS=--permission-mode bypassPermissions --effort high --model glm-5.2" in change_token.stdout
     assert "change-token sk-new" in change_token.stdout
 
 
@@ -513,7 +568,7 @@ def assert_tui_single_account(screen: TerminalScreen) -> None:
     lines = screen.semantic_lines()
     assert_single_prompt(lines)
     assert_contains(lines, "1/3")
-    assert_contains(lines, "→ 1. qwen3.6-plus")
+    assert_contains(lines, "→ 1. glm-5.2")
     assert_contains(lines, "  2. glm-5")
     assert_contains(lines, "  3. kimi-k2")
     assert_not_contains(lines, "[1st]")

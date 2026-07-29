@@ -15,6 +15,7 @@ pub struct ClashConfig {
     pub command: String,
     pub models: Vec<String>,
     pub name: Option<String>,
+    pub effort: String,
 }
 
 #[derive(Debug)]
@@ -110,6 +111,22 @@ pub fn normalize_models(input: &str) -> Vec<String> {
         .collect()
 }
 
+pub fn is_valid_effort(input: &str) -> bool {
+    matches!(input.trim(), "low" | "medium" | "high" | "xhigh" | "max")
+}
+
+pub fn validate_effort(input: &str) -> Result<String, &'static str> {
+    if is_valid_effort(input) {
+        Ok(input.trim().to_string())
+    } else {
+        Err("EFFORT 必须是 low、medium、high、xhigh 或 max")
+    }
+}
+
+pub fn normalize_effort(input: &str) -> String {
+    validate_effort(input).unwrap_or_else(|_| "high".to_string())
+}
+
 pub fn read_config_raw_for_idx(idx: usize) -> Result<ClashConfig, ConfigError> {
     let path = config_path_for_idx(idx);
     let content = fs::read_to_string(&path).map_err(|e| match e.kind() {
@@ -137,6 +154,7 @@ fn parse_config_content(content: &str) -> ClashConfig {
     let mut command = String::new();
     let mut models = Vec::new();
     let mut name: Option<String> = None;
+    let mut effort = "high".to_string();
     let mut in_models = false;
 
     for line in content.lines() {
@@ -161,6 +179,7 @@ fn parse_config_content(content: &str) -> ClashConfig {
                 "AUTH_TOKEN" => auth_token_encrypted = value.to_string(),
                 "COMMAND" => command = value.to_string(),
                 "NAME" => name = Some(value.to_string()).filter(|s| !s.is_empty()),
+                "EFFORT" => effort = normalize_effort(value),
                 "MODELS" if value == "<<MODELS" => {
                     in_models = true;
                 }
@@ -179,7 +198,28 @@ fn parse_config_content(content: &str) -> ClashConfig {
         command,
         models,
         name,
+        effort,
     }
+}
+
+fn config_content(cfg: &ClashConfig, timestamp: &str) -> String {
+    let mut content = String::new();
+    content.push_str("# Clash 配置文件\n");
+    content.push_str(&format!("# 生成时间: {}\n", timestamp));
+    content.push_str(&format!("BASE_URL={}\n", cfg.base_url));
+    content.push_str(&format!("AUTH_TOKEN={}\n", cfg.auth_token_encrypted));
+    if let Some(name) = &cfg.name {
+        content.push_str(&format!("NAME={}\n", name));
+    }
+    content.push_str(&format!("COMMAND={}\n", cfg.command));
+    content.push_str(&format!("EFFORT={}\n", normalize_effort(&cfg.effort)));
+    content.push_str("MODELS=<<MODELS\n");
+    for model in &cfg.models {
+        content.push_str(model);
+        content.push('\n');
+    }
+    content.push_str("MODELS\n");
+    content
 }
 
 pub fn write_config_for_idx(idx: usize, cfg: &ClashConfig) -> Result<(), ConfigError> {
@@ -190,23 +230,7 @@ pub fn write_config_for_idx(idx: usize, cfg: &ClashConfig) -> Result<(), ConfigE
         fs::create_dir_all(parent).map_err(ConfigError::IoError)?;
     }
 
-    let now = chrono_like_timestamp();
-
-    let mut content = String::new();
-    content.push_str("# Clash 配置文件\n");
-    content.push_str(&format!("# 生成时间: {}\n", now));
-    content.push_str(&format!("BASE_URL={}\n", cfg.base_url));
-    content.push_str(&format!("AUTH_TOKEN={}\n", cfg.auth_token_encrypted));
-    if let Some(name) = &cfg.name {
-        content.push_str(&format!("NAME={}\n", name));
-    }
-    content.push_str(&format!("COMMAND={}\n", cfg.command));
-    content.push_str("MODELS=<<MODELS\n");
-    for model in &cfg.models {
-        content.push_str(model);
-        content.push('\n');
-    }
-    content.push_str("MODELS\n");
+    let content = config_content(cfg, &chrono_like_timestamp());
 
     fs::write(&path, content).map_err(ConfigError::IoError)?;
 
@@ -387,6 +411,59 @@ mod tests {
     fn test_normalize_models_single() {
         let models = normalize_models("claude-sonnet-4-20250514");
         assert_eq!(models, vec!["claude-sonnet-4-20250514"]);
+    }
+
+    #[test]
+    fn normalize_effort_accepts_supported_values() {
+        for effort in ["low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(normalize_effort(effort), effort);
+        }
+    }
+
+    #[test]
+    fn normalize_effort_defaults_invalid_values_to_high() {
+        assert_eq!(normalize_effort(""), "high");
+        assert_eq!(normalize_effort("invalid"), "high");
+        assert_eq!(normalize_effort("HIGH"), "high");
+    }
+
+    #[test]
+    fn is_valid_effort_accepts_only_supported_values() {
+        for effort in ["low", "medium", "high", "xhigh", "max"] {
+            assert!(is_valid_effort(effort));
+        }
+        assert!(!is_valid_effort("invalid"));
+        assert!(!is_valid_effort("HIGH"));
+    }
+
+    #[test]
+    fn validate_effort_rejects_invalid_values() {
+        assert_eq!(
+            validate_effort("invalid"),
+            Err("EFFORT 必须是 low、medium、high、xhigh 或 max")
+        );
+    }
+
+    #[test]
+    fn write_config_normalizes_effort() {
+        let cfg = ClashConfig {
+            base_url: "https://api.example.com".to_string(),
+            auth_token_encrypted: "encrypted".to_string(),
+            command: "clash".to_string(),
+            models: vec!["model".to_string()],
+            name: None,
+            effort: "invalid".to_string(),
+        };
+        assert!(config_content(&cfg, "now").contains("EFFORT=high\n"));
+    }
+
+    #[test]
+    fn parse_config_defaults_missing_or_invalid_effort_to_high() {
+        assert_eq!(
+            parse_config_content("BASE_URL=https://api.example.com\n").effort,
+            "high"
+        );
+        assert_eq!(parse_config_content("EFFORT=invalid\n").effort, "high");
     }
 
     #[test]
