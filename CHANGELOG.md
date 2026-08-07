@@ -1,5 +1,14 @@
 # ChangeLog
 
+## v0.5.4
+
+- 优化 Team Leader 规范提示词
+
+## v0.5.3
+
+- `clash config` 支持按账户设置推理深度 `--effort`
+- 优化 Team 协作规范提示词
+
 ## v0.5.2
 
 - 修复 `clash resume` 漏掉纯工具调用会话
