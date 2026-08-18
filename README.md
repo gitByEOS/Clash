@@ -146,6 +146,8 @@ clash chat send --path /Volumes/share/clash-rooms --room dev --name Leader --tex
 
 `watch` 默认使用文件事件低延迟唤醒；事件监听不可用时，`--poll-ms` 作为轮询回退间隔。
 
+每次 `send` 或 `watch` 会将本会话租约续至未来 360 秒，120 秒执行一次 `watch` 可稳定维持在线状态。定向消息写入持久队列，不因目标离线而拒绝；目标下次 `watch` 会按游标读取未消费增量。
+
 触发示例：
 
 ```text

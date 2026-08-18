@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_WATCH_TIMEOUT_SECS: u64 = 30 * 60;
-pub const DEFAULT_LEASE_SECS: u64 = 60;
+pub const DEFAULT_LEASE_SECS: u64 = 360;
 pub const MAX_MESSAGE_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

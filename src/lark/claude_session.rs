@@ -65,6 +65,7 @@ impl ClaudeSession {
             .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
             .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
             .env("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1")
+            .env("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3")
             .env("ENABLE_TOOL_SEARCH", "false")
             .env("CLAUDE_CODE_SUBAGENT_MODEL", &agent.model)
             .env("ANTHROPIC_MODEL", &agent.model)

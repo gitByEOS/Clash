@@ -1,5 +1,11 @@
 # ChangeLog
 
+## v0.5.5
+
+- Team 协作适配更新版本
+- 优化跨会话协作租约与定时 `watch` 提示词
+- 修复 `clash resume` 重复注入系统提示词
+
 ## v0.5.4
 
 - 优化 Team Leader 规范提示词

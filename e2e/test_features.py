@@ -207,7 +207,7 @@ def main() -> int:
 
     resume_exec_raw, resume_exec_screen = capture_resume_exec(env)
     assert_resume_exec(resume_exec_screen)
-    results.append("- resume 确认后向 Claude 透传 --resume <session-id>")
+    results.append("- resume 透传 --resume <session-id> 且不重复注入系统提示词")
 
     resume_all_exec_raw, resume_all_exec_screen = capture_resume_all_exec(env, artifact_dir)
     assert_resume_all_exec(resume_all_exec_screen, artifact_dir)
@@ -559,13 +559,20 @@ def assert_resume_all_scope(screen: shared.TerminalScreen) -> None:
 def assert_resume_exec(screen: shared.TerminalScreen) -> None:
     lines = screen.semantic_lines()
     shared.assert_contains(lines, "ARGS=--permission-mode bypassPermissions")
-    shared.assert_contains(lines, "--resume current-session")
+    assert_resume_args(lines, "current-session")
 
 
 def assert_resume_all_exec(screen: shared.TerminalScreen, artifact_dir: Path) -> None:
     lines = screen.semantic_lines()
     shared.assert_contains(lines, f"PWD={artifact_dir / 'other-project'}")
-    shared.assert_contains(lines, "--resume other-session")
+    assert_resume_args(lines, "other-session")
+
+
+def assert_resume_args(lines: list[str], session_id: str) -> None:
+    shared.assert_contains(lines, "--resume")
+    shared.assert_contains(lines, session_id)
+    shared.assert_not_contains(lines, "--append-")
+    shared.assert_not_contains(lines, "system-prompt-file")
 
 
 def assert_resume_prompt(lines: list[str]) -> None:

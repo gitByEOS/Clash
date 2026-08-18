@@ -143,6 +143,7 @@ fn run_probe(claude_path: &str, base_url: &str) -> Result<Child, std::io::Error>
         .env("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")
         .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
         .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+        .env("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3")
         .arg("-p")
         .arg("ping")
         .arg("--permission-mode")

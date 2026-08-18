@@ -746,6 +746,7 @@ fn set_claude_env(base_url: &str, auth_token: &str, model: &str, max_ctx: Option
     env::set_var("CLAUDE_CODE_ATTRIBUTION_HEADER", "0");
     env::set_var("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
     env::set_var("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
+    env::set_var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3");
     env::set_var("ENABLE_TOOL_SEARCH", "false");
     env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", model);
     env::set_var("ANTHROPIC_MODEL", model);
@@ -760,8 +761,52 @@ fn set_claude_env(base_url: &str, auth_token: &str, model: &str, max_ctx: Option
     }
 }
 
-fn claude_args(model: &str, effort: &str, extra_args: &[String]) -> Vec<String> {
-    let system_prompt = config::read_system_prompt();
+enum LaunchMode {
+    New,
+    Resume { session_id: String },
+}
+
+impl LaunchMode {
+    fn append_system_prompt(&self) -> bool {
+        matches!(self, Self::New)
+    }
+
+    fn extend_args(&self, cmd_args: &mut Vec<String>, extra_args: &[String]) {
+        if let Self::Resume { session_id } = self {
+            cmd_args.push("--resume".to_string());
+            cmd_args.push(session_id.clone());
+        }
+        cmd_args.extend(extra_args.iter().cloned());
+    }
+}
+
+fn claude_args(
+    model: &str,
+    effort: &str,
+    launch_mode: &LaunchMode,
+    extra_args: &[String],
+) -> Vec<String> {
+    let system_prompt_file = launch_mode
+        .append_system_prompt()
+        .then(config::read_system_prompt)
+        .flatten()
+        .map(|_| config::system_prompt_path().to_string_lossy().to_string());
+    build_claude_args(
+        model,
+        effort,
+        launch_mode,
+        system_prompt_file.as_deref(),
+        extra_args,
+    )
+}
+
+fn build_claude_args(
+    model: &str,
+    effort: &str,
+    launch_mode: &LaunchMode,
+    system_prompt_file: Option<&str>,
+    extra_args: &[String],
+) -> Vec<String> {
     let mut cmd_args: Vec<String> = vec![
         "--permission-mode".to_string(),
         "bypassPermissions".to_string(),
@@ -771,12 +816,12 @@ fn claude_args(model: &str, effort: &str, extra_args: &[String]) -> Vec<String> 
         model.to_string(),
     ];
 
-    if system_prompt.is_some() {
+    if let Some(path) = system_prompt_file.filter(|_| launch_mode.append_system_prompt()) {
         cmd_args.push("--append-system-prompt-file".to_string());
-        cmd_args.push(config::system_prompt_path().to_string_lossy().to_string());
+        cmd_args.push(path.to_string());
     }
 
-    cmd_args.extend(extra_args.iter().cloned());
+    launch_mode.extend_args(&mut cmd_args, extra_args);
     cmd_args
 }
 
@@ -987,7 +1032,12 @@ pub fn do_debug(
     set_claude_env(&local_base_url, "sk-clash-debug", &model, max_ctx);
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();
-    let cmd_args = claude_args(&model, &choice.config.effort, &debug_args.claude_args);
+    let cmd_args = claude_args(
+        &model,
+        &choice.config.effort,
+        &LaunchMode::New,
+        &debug_args.claude_args,
+    );
 
     let status = process::Command::new(&claude_path)
         .args(&cmd_args)
@@ -1005,6 +1055,7 @@ pub fn do_debug(
 }
 
 fn launch_selected_claude(
+    launch_mode: LaunchMode,
     extra_args: &[String],
     model_hint: Option<&str>,
     cwd_hint: Option<&str>,
@@ -1024,7 +1075,7 @@ fn launch_selected_claude(
     let claude_path = claude::find_claude_binary()?;
     claude::maybe_check_update();
 
-    let cmd_args = claude_args(&model, &choice.config.effort, extra_args);
+    let cmd_args = claude_args(&model, &choice.config.effort, &launch_mode, extra_args);
 
     #[cfg(unix)]
     {
@@ -1088,9 +1139,12 @@ pub fn do_resume(
     let cwd_hint = selected_session
         .as_ref()
         .and_then(|session| session.cwd.as_deref());
-    let mut resume_args = vec!["--resume".to_string(), session_id];
-    resume_args.extend(extra_args.iter().cloned());
-    launch_selected_claude(&resume_args, model_hint, cwd_hint)
+    launch_selected_claude(
+        LaunchMode::Resume { session_id },
+        extra_args,
+        model_hint,
+        cwd_hint,
+    )
 }
 
 pub fn do_select_and_run(
@@ -1100,5 +1154,64 @@ pub fn do_select_and_run(
     _print_yellow: fn(&str),
     _print_cyan: fn(&str),
 ) -> Result<(), ()> {
-    launch_selected_claude(extra_args, None, None)
+    launch_selected_claude(LaunchMode::New, extra_args, None, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_launch_appends_system_prompt_and_keeps_extra_args() {
+        let args = build_claude_args(
+            "claude-sonnet-4-6",
+            "high",
+            &LaunchMode::New,
+            Some("/tmp/system-prompt"),
+            &["--verbose".to_string()],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "--permission-mode",
+                "bypassPermissions",
+                "--effort",
+                "high",
+                "--model",
+                "claude-sonnet-4-6",
+                "--append-system-prompt-file",
+                "/tmp/system-prompt",
+                "--verbose",
+            ]
+        );
+    }
+
+    #[test]
+    fn resume_launch_skips_system_prompt_and_keeps_extra_args() {
+        let args = build_claude_args(
+            "claude-sonnet-4-6",
+            "high",
+            &LaunchMode::Resume {
+                session_id: "session-1".to_string(),
+            },
+            Some("/tmp/system-prompt"),
+            &["--verbose".to_string()],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "--permission-mode",
+                "bypassPermissions",
+                "--effort",
+                "high",
+                "--model",
+                "claude-sonnet-4-6",
+                "--resume",
+                "session-1",
+                "--verbose",
+            ]
+        );
+    }
 }

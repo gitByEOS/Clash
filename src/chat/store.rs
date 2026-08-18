@@ -174,30 +174,6 @@ impl ChatStore {
             .unwrap_or(false))
     }
 
-    pub fn list_agent_names(&self, room: &str) -> Result<Vec<String>, String> {
-        validate_segment(room, "room")?;
-        self.migrate_agents_if_needed(room)?;
-        let dir = self.agents_dir(room)?;
-        let entries = match fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(format!("无法读取 Agent 目录: {e}")),
-        };
-        let mut names = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("无法读取 Agent 文件: {e}"))?;
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                continue;
-            }
-            if let Some(name) = path.file_stem().and_then(|value| value.to_str()) {
-                names.push(name.to_string());
-            }
-        }
-        names.sort();
-        Ok(names)
-    }
-
     fn write_agent_state(&self, room: &str, name: &str, state: &AgentState) -> Result<(), String> {
         let content =
             serde_json::to_string_pretty(state).map_err(|e| format!("Agent 序列化失败: {e}"))?;
@@ -566,19 +542,6 @@ mod tests {
         assert_eq!(store.read_agent_state("r1", "A").unwrap(), Some(state));
         assert!(root.join("r1").join("agents").join("A.json").exists());
         assert!(!root.join("r1").join("agents.json").exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn list_agent_names_reads_agent_files() {
-        let (store, root) = temp_store();
-        store.refresh_lease("r1", "B", None).unwrap();
-        store.refresh_lease("r1", "A", None).unwrap();
-
-        assert_eq!(
-            store.list_agent_names("r1").unwrap(),
-            vec!["A".to_string(), "B".to_string()]
-        );
         let _ = fs::remove_dir_all(root);
     }
 

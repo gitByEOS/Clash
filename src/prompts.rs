@@ -45,7 +45,7 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
 ## 生命周期
 
 ```
-定义规范 → TeamCreate → TaskCreate → Agent派发 → 验收 → 返工或合并 → 清理
+定义规范 → TaskCreate → Agent派发 → 验收 → 返工或合并 → 收尾
 ```
 
 ## 任务拆分原则
@@ -63,28 +63,23 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
   - 简单任务: 直接在 prompt 中描述要求
   - 复杂任务: 先写入文档说明规范再派发
 
-2. 创建团队
-  - TeamCreate({team_name: "what-to-do")
-  
-3. 创建任务
+2. 创建任务
   - 例: A完成后 → B和C同时做 → D等B和C都完成后做
   	- TaskCreate({subject: "D"})
   	- TaskUpdate({taskId: "4", addBlockedBy: ["2", "3"]})  // 4等2和3都完成
 
-4. 分批派发任务
+3. 分批派发任务
   - 等待 A 完成 → 验收 → 标记 completed
   - 第2批: 并行派发 B 和 C
-    - Agent({subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", team_name, name: "B", prompt})
-    - Agent({subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", team_name, name: "C", prompt})
+    - Agent({subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", name: "B", prompt})
+    - Agent({subagent_type: "general-purpose", model: "sonnet", mode: "bypassPermissions", name: "C", prompt})
 
-5. 验收
+4. 验收
   - 读取 Subagent 产出的文件验证内容
   - 验收不通过 → 要求返工 → 再次验收
 
-6. 清理团队
+5. 收尾
   - 向每个 Subagent 发送 shutdown_request
-  - 编辑 ~/.claude/teams/team_name/config.json
-  - 调用 TeamDelete
 
 ```
 
@@ -118,33 +113,10 @@ Agent({model: "sonnet", mode: "bypassPermissions"})
 | 运行测试 | ⭐⭐ | 你自己重新运行验证 |
 | 写报告 | ⭐ | 你自己写 |
 
-## 清理团队
-
-### 已知行为
-
-```
-shutdown_request → Subagent 批准 → 仍显示活跃 → TeamDelete 失败
-```
-
-shutdown_response 只是通知协议，不会真正结束 Subagent。
-
-### 安全清理步骤（前提：验收通过）
-
-```
-1. 向每个 Subagent 发送 shutdown_request
-2. 等每个 Subagent 回复 shutdown_response approve: true
-3. Read ~/.claude/teams/<team-name>/config.json，确认无未验收任务
-4. 从 members 数组删除所有 name != "team-lead" 的成员后 Write 回写
-5. 调用 TeamDelete；失败时重新 Read config，核对残留成员后再处理
-```
-
-**原理：** `shutdown_response` 只表示成员确认，不会结束进程或移除成员记录。必须在全部确认后由 team-lead 删除成员记录，TeamDelete 才会成功。此操作只影响当前团队，不会误删其他团队。
-
 ## 常见问题
 
 | 问题 | 解决 |
 |------|------|
-| TeamDelete 失败 active members | 编辑 config.json 删除成员后重试 |
 | Subagent 不回复 shutdown | 重发 shutdown_request |
 | `summary is required` | SendMessage 添加 summary 参数 |
 | `must be sent to "team-lead"` | shutdown_response 的 to 必须是 "team-lead" |
@@ -183,8 +155,9 @@ clash chat history --path <路径|URI> --room <房间>
 
 ## 规则
 
-- `send` 和 `watch` 都会刷新当前会话租约
-- `watch --expect <name>` 发现目标离线时必须停止等待
+- `send` 和 `watch` 都会刷新当前会话 360 秒租约
+- 开始跨会话协作后，使用 `CronCreate` 创建 `* * * * *` 定时任务；定时提示必须要求执行 `clash chat watch`，并带上当前会话的 `--path`、`--room`、`--name` 参数
+- 定向消息会写入持久队列，目标离线时仍可发送，目标下次 `watch` 会按游标读取增量
 - 需要唤醒所有人时使用 `@all`
 - 完成任务后必须用 `clash chat send` 回写结果
 - 发送 Markdown 反引号内容时，整段消息用单引号：``--text '@目标 请看 `main.lua`'``，否则 bash 会先执行反引号里的内容

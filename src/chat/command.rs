@@ -28,18 +28,6 @@ fn do_send(args: &[String]) -> Result<(), String> {
     let parsed = parse_send_args(args)?;
     let store = chat_store(parsed.path.as_deref())?;
     let to = parsed.to.or_else(|| infer_target(&parsed.text));
-    if let Some(target) = &to {
-        if !target.eq_ignore_ascii_case("all") && !store.is_agent_online(&parsed.room, target)? {
-            let known_agents = store.list_agent_names(&parsed.room)?;
-            let known = if known_agents.is_empty() {
-                String::new()
-            } else {
-                format!("，已知 Agent: {}", known_agents.join(", "))
-            };
-            return Err(format!("目标 @{target} 不在线{known}"));
-        }
-    }
-
     store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
     let message = ChatMessage {
         id: new_message_id(),
@@ -63,15 +51,21 @@ fn do_watch(args: &[String]) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(parsed.timeout_secs);
     store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
 
-    if let Some(prompt) = check_watch_messages(&store, &parsed)? {
+    let mut expect_is_online = is_expected_agent_online(&store, &parsed)?;
+    if let Some(prompt) = check_watch_messages(&store, &parsed, &mut expect_is_online)? {
         return finish_watch(&store, &parsed, prompt);
     }
 
     match create_message_watcher(&store, &parsed.room) {
-        Ok((watcher, watcher_rx)) => {
-            event_watch_loop(&store, &parsed, deadline, watcher, watcher_rx)
-        }
-        Err(_) => poll_watch_loop(&store, &parsed, deadline),
+        Ok((watcher, watcher_rx)) => event_watch_loop(
+            &store,
+            &parsed,
+            deadline,
+            watcher,
+            watcher_rx,
+            &mut expect_is_online,
+        ),
+        Err(_) => poll_watch_loop(&store, &parsed, deadline, &mut expect_is_online),
     }
 }
 
@@ -81,6 +75,7 @@ fn event_watch_loop(
     deadline: Instant,
     _watcher: RecommendedWatcher,
     watcher_rx: Receiver<notify::Result<Event>>,
+    expect_is_online: &mut bool,
 ) -> Result<(), String> {
     let messages_path = store.messages_path(&parsed.room)?;
     loop {
@@ -95,32 +90,42 @@ fn event_watch_loop(
                 if !is_messages_event(&event, &messages_path) {
                     continue;
                 }
-                if let Some(prompt) = check_watch_messages(store, parsed)? {
+                if let Some(prompt) = check_watch_messages(store, parsed, expect_is_online)? {
                     return finish_watch(store, parsed, prompt);
                 }
                 store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
             }
             Ok(Err(_)) => {
-                if let Some(prompt) = check_watch_messages(store, parsed)? {
+                if let Some(prompt) = check_watch_messages(store, parsed, expect_is_online)? {
                     return finish_watch(store, parsed, prompt);
                 }
                 store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
             }
             Err(RecvTimeoutError::Timeout) => {
+                if let Some(prompt) = check_watch_messages(store, parsed, expect_is_online)? {
+                    return finish_watch(store, parsed, prompt);
+                }
                 store.refresh_lease(&parsed.room, &parsed.name, parsed.status.as_deref())?;
             }
-            Err(RecvTimeoutError::Disconnected) => return poll_watch_loop(store, parsed, deadline),
+            Err(RecvTimeoutError::Disconnected) => {
+                return poll_watch_loop(store, parsed, deadline, expect_is_online)
+            }
         }
     }
 }
 
-fn poll_watch_loop(store: &ChatStore, parsed: &WatchArgs, deadline: Instant) -> Result<(), String> {
+fn poll_watch_loop(
+    store: &ChatStore,
+    parsed: &WatchArgs,
+    deadline: Instant,
+    expect_is_online: &mut bool,
+) -> Result<(), String> {
     loop {
         if Instant::now() >= deadline {
             return Err("等待超时".to_string());
         }
 
-        if let Some(prompt) = check_watch_messages(store, parsed)? {
+        if let Some(prompt) = check_watch_messages(store, parsed, expect_is_online)? {
             return finish_watch(store, parsed, prompt);
         }
 
@@ -130,11 +135,35 @@ fn poll_watch_loop(store: &ChatStore, parsed: &WatchArgs, deadline: Instant) -> 
     }
 }
 
-fn check_watch_messages(store: &ChatStore, parsed: &WatchArgs) -> Result<Option<String>, String> {
+fn is_expected_agent_online(store: &ChatStore, parsed: &WatchArgs) -> Result<bool, String> {
+    parsed
+        .expect
+        .as_deref()
+        .map(|expect| store.is_agent_online(&parsed.room, expect))
+        .transpose()
+        .map(|online| online.unwrap_or(false))
+}
+
+fn check_expected_agent_online(
+    expect: &str,
+    expect_is_online: &mut bool,
+    is_online: bool,
+) -> Result<(), String> {
+    if *expect_is_online && !is_online {
+        return Err(format!("目标 @{expect} 不在线"));
+    }
+    *expect_is_online |= is_online;
+    Ok(())
+}
+
+fn check_watch_messages(
+    store: &ChatStore,
+    parsed: &WatchArgs,
+    expect_is_online: &mut bool,
+) -> Result<Option<String>, String> {
     if let Some(expect) = &parsed.expect {
-        if !store.is_agent_online(&parsed.room, expect)? {
-            return Err(format!("目标 @{expect} 不在线"));
-        }
+        let is_online = store.is_agent_online(&parsed.room, expect)?;
+        check_expected_agent_online(expect, expect_is_online, is_online)?;
     }
 
     let cursor = store.read_cursor(&parsed.room, &parsed.name)?;
@@ -424,6 +453,19 @@ fn chat_usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn temp_store() -> (ChatStore, std::path::PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "clash-chat-command-test-{}-{nanos}",
+            std::process::id()
+        ));
+        (ChatStore::with_root(root.clone()), root)
+    }
 
     #[test]
     fn default_room_uses_date_prefix() {
@@ -470,6 +512,58 @@ mod tests {
         let args = vec!["--name".to_string(), "A".to_string()];
         let parsed = parse_watch_args(&args).unwrap();
         assert_eq!(parsed.timeout_secs, 30 * 60);
+    }
+
+    #[test]
+    fn send_persists_message_for_offline_target() {
+        let (store, root) = temp_store();
+        let args = vec![
+            "--room".to_string(),
+            "r1".to_string(),
+            "--path".to_string(),
+            root.display().to_string(),
+            "--name".to_string(),
+            "A".to_string(),
+            "--text".to_string(),
+            "@B 等待处理".to_string(),
+        ];
+
+        do_send(&args).unwrap();
+
+        let messages = store.history("r1", 10).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].to.as_deref(), Some("B"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expect_allows_initially_offline_target() {
+        let (store, root) = temp_store();
+        let parsed = WatchArgs {
+            room: "r1".to_string(),
+            path: None,
+            name: "A".to_string(),
+            expect: Some("B".to_string()),
+            status: None,
+            timeout_secs: 1,
+            poll_ms: 1,
+        };
+        let mut expect_is_online = is_expected_agent_online(&store, &parsed).unwrap();
+
+        assert!(!expect_is_online);
+        assert!(check_watch_messages(&store, &parsed, &mut expect_is_online)
+            .unwrap()
+            .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expect_stops_after_seen_target_goes_offline() {
+        let mut expect_is_online = true;
+
+        let err = check_expected_agent_online("B", &mut expect_is_online, false).unwrap_err();
+
+        assert_eq!(err, "目标 @B 不在线");
     }
 
     #[test]
