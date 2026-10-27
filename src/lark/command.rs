@@ -1,9 +1,11 @@
 use crate::lark::types::{LarkOptions, DEFAULT_POLL_SECS, DEFAULT_PREFIX};
+use std::path::{Path, PathBuf};
 
 pub fn parse_lark_args(args: &[String]) -> Result<LarkOptions, String> {
     let mut prefix = DEFAULT_PREFIX.to_string();
     let mut poll_secs = DEFAULT_POLL_SECS;
     let mut once = false;
+    let mut model_index = None;
     let mut i = 0;
 
     while i < args.len() {
@@ -29,6 +31,15 @@ pub fn parse_lark_args(args: &[String]) -> Result<LarkOptions, String> {
                 }
             }
             "--once" => once = true,
+            "-m" => {
+                i += 1;
+                let value = args.get(i).ok_or_else(|| "-m 缺少值".to_string())?;
+                model_index = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| "-m 必须是正整数".to_string())?,
+                );
+            }
             other => return Err(format!("未知参数: {other}")),
         }
         i += 1;
@@ -38,6 +49,7 @@ pub fn parse_lark_args(args: &[String]) -> Result<LarkOptions, String> {
         prefix,
         poll_secs,
         once,
+        model_index,
     })
 }
 
@@ -59,6 +71,30 @@ fn trim_command_separator(text: &str) -> &str {
         c == ':' || c == '：' || c == ',' || c == '，' || c.is_whitespace()
     })
     .trim()
+}
+
+/// 会话群斜杠命令。整句匹配，避免误伤正文里的 /stop
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCommand {
+    Stop,
+}
+
+pub fn parse_session_command(text: &str) -> Option<SessionCommand> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "/stop" => Some(SessionCommand::Stop),
+        _ => None,
+    }
+}
+
+pub fn resolve_working_dir(dir: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(raw) = dir.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let path = Path::new(raw);
+    if !path.is_dir() {
+        return Err(format!("DIR 不是目录: {raw}"));
+    }
+    Ok(Some(path.to_path_buf()))
 }
 
 pub fn normalize_session_chat_name(raw_name: &str, prefix: &str) -> String {

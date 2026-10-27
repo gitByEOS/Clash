@@ -109,7 +109,7 @@ clash test                    # 测试所有账户的所有模型（默认）
 clash test --idx 1            # 只测 idx1 的 MODELS
 clash test --idx 1 --model m  # 只测 idx1 的单个模型
 clash debug                   # 选模型后启动 Claude，并打开 mock-ollama 日志页
-clash debug --idx 1 --model m # 指定账户和模型启动 debug
+clash debug -m 3              # 使用 TUI 列表第 3 项启动 debug
 clash debug --port 11436      # 指定 mock-ollama 监听端口，默认 11435
 clash resume                  # 分屏搜索 Claude 历史并恢复会话
 clash chat send --name A --text "@B 看一下"  # 向另一个 Claude 发消息
@@ -119,6 +119,7 @@ clash prompts --json          # 打印完整请求信息 JSON
 clash hooks                   # 打开浏览器编辑 hooks 配置
 clash rename                  # 交互式修改账户别名
 clash lark                    # 监听 Clash-GroupManager；发「新会话 名称」创建会话，流式卡片回复
+DIR=notes clash lark          # 在 notes 目录启动飞书监听
 ```
 
 ### clash debug 说明

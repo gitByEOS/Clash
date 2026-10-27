@@ -5,6 +5,74 @@ use std::env;
 use std::process;
 
 const UPDATE_CHECK_INTERVAL_SECS: i64 = 3 * 24 * 60 * 60; // 3 days
+const MAX_CTX_ENV: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+const FIXED_CLAUDE_ENV: &[(&str, &str)] = &[
+    ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+    ("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1"),
+    ("CLAUDE_CODE_ATTRIBUTION_HEADER", "0"),
+    ("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1"),
+    ("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1"),
+    ("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3"),
+    ("CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION", "999"),
+    ("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", "99"),
+    ("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "1"),
+    ("ENABLE_TOOL_SEARCH", "false"),
+];
+
+pub struct ClaudeEnvSpec<'a> {
+    pub base_url: &'a str,
+    pub auth_token: &'a str,
+    pub model: &'a str,
+    pub max_ctx: Option<u64>,
+}
+
+/// 启动 Claude 时写入的环境变量，含账号、模型与子代理上限
+pub fn claude_env_pairs(spec: &ClaudeEnvSpec<'_>) -> Vec<(String, String)> {
+    let mut pairs = vec![
+        ("ANTHROPIC_BASE_URL".to_string(), spec.base_url.to_string()),
+        (
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            spec.auth_token.to_string(),
+        ),
+    ];
+    pairs.extend(
+        FIXED_CLAUDE_ENV
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string())),
+    );
+    for name in [
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    ] {
+        pairs.push((name.to_string(), spec.model.to_string()));
+    }
+    if let Some(max_ctx) = spec.max_ctx {
+        pairs.push((MAX_CTX_ENV.to_string(), max_ctx.to_string()));
+    }
+    pairs
+}
+
+pub fn set_claude_env(spec: &ClaudeEnvSpec<'_>) {
+    for (name, value) in claude_env_pairs(spec) {
+        env::set_var(name, value);
+    }
+    if spec.max_ctx.is_none() {
+        env::remove_var(MAX_CTX_ENV);
+    }
+}
+
+pub fn apply_claude_env(command: &mut process::Command, spec: &ClaudeEnvSpec<'_>) {
+    for (name, value) in claude_env_pairs(spec) {
+        command.env(name, value);
+    }
+    if spec.max_ctx.is_none() {
+        command.env_remove(MAX_CTX_ENV);
+    }
+}
 
 fn app_config_path() -> std::path::PathBuf {
     config::config_dir().join("app_config")
@@ -252,4 +320,42 @@ pub fn find_claude_binary() -> Result<String, ()> {
 
     print_red("安装成功但仍未找到 claude，请确认 npm 全局路径在 PATH 中");
     Err(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn claude_env_pairs_include_subagent_limits() {
+        let spec = ClaudeEnvSpec {
+            base_url: "https://example.com",
+            auth_token: "token",
+            model: "demo-model",
+            max_ctx: None,
+        };
+        let map: HashMap<_, _> = claude_env_pairs(&spec).into_iter().collect();
+
+        assert_eq!(
+            map.get("CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION")
+                .map(String::as_str),
+            Some("999")
+        );
+        assert_eq!(
+            map.get("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")
+                .map(String::as_str),
+            Some("99")
+        );
+        assert_eq!(
+            map.get("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            map.get("ANTHROPIC_MODEL").map(String::as_str),
+            Some("demo-model")
+        );
+        assert!(!map.contains_key(MAX_CTX_ENV));
+    }
 }

@@ -131,20 +131,16 @@ pub fn capture_claude_prompt(print_red: fn(&str)) -> Result<PromptCapture, ()> {
 
 fn run_probe(claude_path: &str, base_url: &str) -> Result<Child, std::io::Error> {
     let mut cmd = process::Command::new(claude_path);
-    cmd.env("ANTHROPIC_BASE_URL", base_url)
-        .env("ANTHROPIC_AUTH_TOKEN", "sk-clash-prompt-capture")
-        .env("ANTHROPIC_MODEL", CAPTURE_MODEL)
-        .env("ANTHROPIC_SMALL_FAST_MODEL", CAPTURE_MODEL)
-        .env("ANTHROPIC_DEFAULT_SONNET_MODEL", CAPTURE_MODEL)
-        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", CAPTURE_MODEL)
-        .env("ANTHROPIC_DEFAULT_HAIKU_MODEL", CAPTURE_MODEL)
-        .env("CLAUDE_CODE_SUBAGENT_MODEL", CAPTURE_MODEL)
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
-        .env("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")
-        .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-        .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
-        .env("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3")
-        .arg("-p")
+    claude::apply_claude_env(
+        &mut cmd,
+        &claude::ClaudeEnvSpec {
+            base_url,
+            auth_token: "sk-clash-prompt-capture",
+            model: CAPTURE_MODEL,
+            max_ctx: None,
+        },
+    );
+    cmd.arg("-p")
         .arg("ping")
         .arg("--permission-mode")
         .arg("bypassPermissions")

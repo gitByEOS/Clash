@@ -4,14 +4,14 @@ pub const DEFAULT_PREFIX: &str = "Clash-";
 pub const MANAGER_CHAT_NAME: &str = "Clash-GroupManager";
 pub const DEFAULT_POLL_SECS: u64 = 15;
 pub const EVENT_RECONNECT_SECS: u64 = 3;
-pub const CLAUDE_TURN_TIMEOUT_SECS: u64 = 600;
-pub const DEFAULT_CARD_UPDATE_THROTTLE_MS: u64 = 120;
 
 #[derive(Debug, Clone)]
 pub struct LarkOptions {
     pub prefix: String,
     pub poll_secs: u64,
     pub once: bool,
+    /// 模型序号（1-based），对齐 clash 交互列表显示的数字
+    pub model_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]

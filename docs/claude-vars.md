@@ -1,6 +1,6 @@
 # Claude Code 环境变量与 CLI 参数参考
 
-> 数据来源：本机 Claude Code `2.1.191` 的 `claude --help` 和 native binary 可见环境变量。
+> 数据来源：本机 Claude Code `2.1.217` 的 `claude --help` 和 native binary 可见环境变量。
 
 ## 如何更新
 
@@ -83,6 +83,9 @@ strings "$(command -v claude)" | sort -u
 | `CLAUDE_CODE_ENABLE_AUTO_MODE`         | 启用 auto mode classifier |
 | `CLAUDE_CODE_EFFORT_LEVEL`             | 指定默认推理力度            |
 | `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` | 限制并发工具调用数          |
+| `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` | 单会话最多派发子代理数       |
+| `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` | 同时运行的子代理上限         |
+| `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | 子代理嵌套派发深度           |
 | `CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS` | 限制 Read 工具输出 token |
 | `CLAUDE_CODE_SAFE_MODE`                | 以安全模式启动              |
 | `CLAUDE_CODE_ENABLE_TASKS`             | 启用 tasks                 |
@@ -127,7 +130,7 @@ strings "$(command -v claude)" | sort -u
 | `--max-budget-usd <amount>`       | print 模式最大 API 花费                                                        |
 | `--no-session-persistence`        | 禁用会话持久化                                                                  |
 | `--mcp-config <configs...>`       | 加载 MCP 配置                                                                |
-| `--mcp-debug`                     | 已废弃，改用 `--debug`                                                       |
+| `--forward-subagent-text`         | 在 stream-json 输出中转发子代理文本与思考块                                    |
 | `--strict-mcp-config`             | 只使用 `--mcp-config` 指定的 MCP                                               |
 | `--add-dir <directories...>`      | 增加可访问目录                                                                  |
 | `--settings <file-or-json>`       | 指定 settings                                                              |

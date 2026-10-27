@@ -1,7 +1,6 @@
 use crate::claude;
 use crate::lark::lark_cli::{drain_stderr, log_verbose};
-use crate::lark::render::{result_text, ClaudeRenderState};
-use crate::lark::types::{AgentConfig, LarkChat, CLAUDE_TURN_TIMEOUT_SECS};
+use crate::lark::types::{AgentConfig, LarkChat};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -13,6 +12,7 @@ pub struct ClaudeSession {
     child: Child,
     stdin: std::process::ChildStdin,
     rx: Receiver<Value>,
+    interrupt_seq: u64,
 }
 
 impl Drop for ClaudeSession {
@@ -51,28 +51,17 @@ impl ClaudeSession {
 
         let mut command = Command::new(&claude_path);
         command.args(&args);
-        if let Some(max_ctx) = agent.max_ctx {
-            command.env("CLAUDE_CODE_MAX_CONTEXT_TOKENS", max_ctx.to_string());
-        } else {
-            command.env_remove("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
-        }
+        claude::apply_claude_env(
+            &mut command,
+            &claude::ClaudeEnvSpec {
+                base_url: &agent.base_url,
+                auth_token: &agent.auth_token,
+                model: &agent.model,
+                max_ctx: agent.max_ctx,
+            },
+        );
 
         let mut child = command
-            .env("ANTHROPIC_BASE_URL", &agent.base_url)
-            .env("ANTHROPIC_AUTH_TOKEN", &agent.auth_token)
-            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
-            .env("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")
-            .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-            .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
-            .env("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1")
-            .env("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3")
-            .env("ENABLE_TOOL_SEARCH", "false")
-            .env("CLAUDE_CODE_SUBAGENT_MODEL", &agent.model)
-            .env("ANTHROPIC_MODEL", &agent.model)
-            .env("ANTHROPIC_SMALL_FAST_MODEL", &agent.model)
-            .env("ANTHROPIC_DEFAULT_SONNET_MODEL", &agent.model)
-            .env("ANTHROPIC_DEFAULT_OPUS_MODEL", &agent.model)
-            .env("ANTHROPIC_DEFAULT_HAIKU_MODEL", &agent.model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -110,13 +99,15 @@ impl ClaudeSession {
             }
         });
 
-        Ok(Self { child, stdin, rx })
+        Ok(Self {
+            child,
+            stdin,
+            rx,
+            interrupt_seq: 0,
+        })
     }
 
-    pub fn ask_stream<F>(&mut self, prompt: &str, mut on_text: F) -> Result<String, String>
-    where
-        F: FnMut(&str) -> Result<(), String>,
-    {
+    pub fn send_prompt(&mut self, prompt: &str) -> Result<(), String> {
         let input = json!({
             "type": "user",
             "message": {
@@ -125,40 +116,40 @@ impl ClaudeSession {
             },
             "parent_tool_use_id": null
         });
-        writeln!(self.stdin, "{input}").map_err(|e| format!("写入 claude 失败: {e}"))?;
+        self.write_line(&input)
+    }
+
+    /// 中断当前回合，不拆掉会话进程
+    pub fn interrupt(&mut self) -> Result<(), String> {
+        self.interrupt_seq += 1;
+        let input = json!({
+            "type": "control_request",
+            "request_id": format!("stop-{}", self.interrupt_seq),
+            "request": { "subtype": "interrupt" }
+        });
+        self.write_line(&input)
+    }
+
+    pub fn recv_event(&mut self, timeout: Duration) -> Result<Option<Value>, String> {
+        match self.rx.recv_timeout(timeout) {
+            Ok(event) => Ok(Some(event)),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => Err("claude 输出通道已关闭".to_string()),
+        }
+    }
+
+    pub fn try_recv_event(&mut self) -> Result<Option<Value>, String> {
+        match self.rx.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err("claude 输出通道已关闭".to_string()),
+        }
+    }
+
+    fn write_line(&mut self, value: &Value) -> Result<(), String> {
+        writeln!(self.stdin, "{value}").map_err(|e| format!("写入 claude 失败: {e}"))?;
         self.stdin
             .flush()
-            .map_err(|e| format!("刷新 claude stdin 失败: {e}"))?;
-
-        let mut state = ClaudeRenderState::new();
-        loop {
-            let event = match self
-                .rx
-                .recv_timeout(Duration::from_secs(CLAUDE_TURN_TIMEOUT_SECS))
-            {
-                Ok(event) => event,
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(format!("Claude 超过 {CLAUDE_TURN_TIMEOUT_SECS} 秒未返回"));
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("claude 输出通道已关闭".to_string());
-                }
-            };
-            match event.get("type").and_then(Value::as_str) {
-                Some("assistant") | Some("user") => {
-                    if state.apply_event(&event) {
-                        let rendered = state.render();
-                        on_text(&rendered)?;
-                    }
-                }
-                Some("result") => {
-                    if let Some(result) = result_text(&event).filter(|s| !s.trim().is_empty()) {
-                        state.set_answer_if_empty(&result);
-                    }
-                    return Ok(state.render());
-                }
-                _ => {}
-            }
-        }
+            .map_err(|e| format!("刷新 claude stdin 失败: {e}"))
     }
 }

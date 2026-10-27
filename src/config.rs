@@ -292,6 +292,89 @@ pub fn read_config_slots() -> Result<Vec<ConfigSlot>, ConfigError> {
     Ok(slots)
 }
 
+#[derive(Clone)]
+pub struct RunModelChoice {
+    pub label: String,
+    pub model: String,
+    pub config: ClashConfig,
+}
+
+pub fn account_label(slot: &ConfigSlot) -> String {
+    if let Some(name) = &slot.config.name {
+        name.clone()
+    } else {
+        ordinal(slot.idx + 1)
+    }
+}
+
+/// 序数词标签：1st 2nd 3rd 4th 11th 12th 21st，teen 系列全用 th
+pub fn ordinal(n: usize) -> String {
+    let suffix = if n % 100 / 10 == 1 {
+        "th"
+    } else {
+        match n % 10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        }
+    };
+    format!("{n}{suffix}")
+}
+
+/// 展平所有账户的模型为选择列表，序号与 tui 交互列表一致（1-based）
+pub fn collect_run_choices() -> Result<Vec<RunModelChoice>, ConfigError> {
+    let slots = read_config_slots()?;
+    let is_multi_account = slots.len() > 1;
+    let mut choices = Vec::new();
+
+    for slot in slots {
+        for model in &slot.config.models {
+            let label = if is_multi_account {
+                format!("[{}]  {}", account_label(&slot), model)
+            } else {
+                model.clone()
+            };
+            choices.push(RunModelChoice {
+                label,
+                model: model.clone(),
+                config: slot.config.clone(),
+            });
+        }
+    }
+
+    Ok(choices)
+}
+
+pub fn format_choice_list<S: AsRef<str>>(labels: &[S]) -> String {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| format!("  {}  {}", i + 1, label.as_ref()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 解析 -m 序号，缺省取首项；0 / 越界 / 空列表都失败
+pub fn resolve_choice_index<S: AsRef<str>>(
+    labels: &[S],
+    index: Option<usize>,
+) -> Result<usize, String> {
+    if labels.is_empty() {
+        return Err("未找到可用模型".to_string());
+    }
+    let Some(index) = index else {
+        return Ok(0);
+    };
+    if !(1..=labels.len()).contains(&index) {
+        return Err(format!(
+            "-m {index} 超出范围，可选编号：\n{}",
+            format_choice_list(labels)
+        ));
+    }
+    Ok(index - 1)
+}
+
 pub fn delete_all_configs() -> Result<(), ConfigError> {
     let dir = config_dir();
     let entries = match fs::read_dir(&dir) {
@@ -493,5 +576,67 @@ mod tests {
         assert!(!merged.contains("\n旧\n"));
         assert!(merged.starts_with("前\n"));
         assert!(merged.ends_with("后"));
+    }
+
+    #[test]
+    fn resolve_choice_index_defaults_to_first() {
+        assert_eq!(
+            resolve_choice_index(&["模型0", "模型1", "模型2"], None),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn resolve_choice_index_maps_one_based_number() {
+        assert_eq!(
+            resolve_choice_index(&["模型0", "模型1", "模型2"], Some(2)),
+            Ok(1)
+        );
+        assert_eq!(
+            resolve_choice_index(&["模型0", "模型1", "模型2"], Some(3)),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn resolve_choice_index_rejects_zero_and_out_of_range() {
+        let labels = ["模型0", "模型1"];
+        let zero = resolve_choice_index(&labels, Some(0)).unwrap_err();
+        assert!(zero.contains("超出范围"), "实际错误：{zero}");
+        assert!(zero.contains("1  模型0"), "应列出编号：{zero}");
+
+        let overflow = resolve_choice_index(&labels, Some(3)).unwrap_err();
+        assert!(overflow.contains("超出范围"), "实际错误：{overflow}");
+        assert!(overflow.contains("1  模型0"), "应列出编号：{overflow}");
+    }
+
+    #[test]
+    fn resolve_choice_index_rejects_empty_list() {
+        let labels: [&str; 0] = [];
+        assert!(resolve_choice_index(&labels, None).is_err());
+        assert!(resolve_choice_index(&labels, Some(1)).is_err());
+    }
+
+    #[test]
+    fn ordinal_handles_special_and_regular_cases() {
+        // 1-3 特殊尾缀
+        assert_eq!(ordinal(1), "1st");
+        assert_eq!(ordinal(2), "2nd");
+        assert_eq!(ordinal(3), "3rd");
+        // 4-10 常规 th
+        assert_eq!(ordinal(4), "4th");
+        assert_eq!(ordinal(10), "10th");
+        // 11-13 teen 系列全用 th
+        assert_eq!(ordinal(11), "11th");
+        assert_eq!(ordinal(12), "12th");
+        assert_eq!(ordinal(13), "13th");
+        // 21-23 又回特殊尾缀
+        assert_eq!(ordinal(21), "21st");
+        assert_eq!(ordinal(22), "22nd");
+        assert_eq!(ordinal(23), "23rd");
+        // 111-113 teen 再次覆盖特殊尾缀
+        assert_eq!(ordinal(111), "111th");
+        assert_eq!(ordinal(112), "112th");
+        assert_eq!(ordinal(121), "121st");
     }
 }

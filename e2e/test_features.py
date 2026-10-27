@@ -143,6 +143,18 @@ def main() -> int:
     shared.assert_tui_multi_account(initial_screen)
     results.append(f"- 多账户 run 使用 1st / 2st 标签，共 {len(shared.MODELS) + len(shared.ALT_MODELS)} 个模型")
 
+    log("test lark dir not a directory")
+    shared.test_lark_dir_invalid(env)
+    results.append("- DIR 指向非目录时 clash lark 失败并提示")
+
+    log("test lark model index out of range")
+    shared.test_lark_model_index_overflow(env)
+    results.append("- clash lark -m 越界失败并列出可选编号")
+
+    log("test debug model index out of range")
+    shared.test_debug_model_index_overflow(env)
+    results.append("- clash debug -m 越界失败并列出可选编号")
+
     log("test rename via config")
     shared.test_rename_via_config(env, 0, "work")
     results.append("- config 设置 NAME=work 后配置文件含 NAME 字段")
@@ -292,6 +304,31 @@ def capture_frame(
     return bytes(raw), screen
 
 
+def capture_resume_exec_frame(
+    env: dict[str, str],
+    keys: list[bytes],
+    until: bytes,
+) -> tuple[bytes, shared.TerminalScreen]:
+    """resume exec 专用：等 TUI 渲染后写 key，每个 key 后让 TUI 处理，最后等 mock claude 输出 ARGS="""
+    pid, master = os.forkpty()
+    if pid == 0:
+        os.chdir(ROOT)
+        os.execve(str(CLASH_BIN), ["clash", "resume"], env)
+    shared.set_winsize(master)
+    raw = bytearray()
+    raw.extend(shared.drain(master, 3.0, until=until, min_bytes=700))
+    for key in keys:
+        os.write(master, key)
+        raw.extend(shared.drain(master, 1.0))
+    raw.extend(shared.drain(master, 4.0, until=b"ARGS="))
+    shared.stop_child(pid)
+    raw.extend(shared.drain(master, 0.2))
+    os.close(master)
+    screen = shared.TerminalScreen(shared.ROWS, shared.COLS)
+    screen.feed(bytes(raw))
+    return bytes(raw), screen
+
+
 def prepare_resume_history(env: dict[str, str], artifact_dir: Path) -> None:
     home = artifact_dir / "home"
     projects = home / ".claude" / "projects"
@@ -429,7 +466,7 @@ def capture_resume_exec(env: dict[str, str]) -> tuple[bytes, shared.TerminalScre
         claude.chmod(0o755)
         run_env = env.copy()
         run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
-        return capture_frame(run_env, ["clash", "resume"], keys=[b"\r"], until=b"resume-current")
+        return capture_resume_exec_frame(run_env, [b"\r"], b"resume-current")
 
 
 def capture_resume_all_exec(env: dict[str, str], artifact_dir: Path) -> tuple[bytes, shared.TerminalScreen]:
@@ -439,12 +476,7 @@ def capture_resume_all_exec(env: dict[str, str], artifact_dir: Path) -> tuple[by
         claude.chmod(0o755)
         run_env = env.copy()
         run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
-        return capture_frame(
-            run_env,
-            ["clash", "resume"],
-            keys=[b"\x1b[C", b"\r"],
-            until=b"other-project-title",
-        )
+        return capture_resume_exec_frame(run_env, [b"\x1b[C", b"\r"], b"other-project-title")
 
 
 def log(message: str) -> None:

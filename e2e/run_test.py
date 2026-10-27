@@ -509,6 +509,26 @@ def test_removed_commands(env: dict[str, str]) -> None:
     assert "change-token sk-new" in change_token.stdout
 
 
+def test_lark_dir_invalid(env: dict[str, str]) -> None:
+    run_env = env.copy()
+    run_env["DIR"] = str(Path("/nonexistent-clash-e2e-dir"))
+    result = run_clash(["lark"], run_env, check=False)
+    assert result.returncode != 0
+    assert "无法进入工作目录" in result.stderr or "DIR 不是目录" in result.stderr
+
+
+def test_lark_model_index_overflow(env: dict[str, str]) -> None:
+    result = run_clash(["lark", "-m", "99"], env, check=False)
+    assert result.returncode != 0
+    assert "超出范围" in result.stdout or "超出范围" in result.stderr
+
+
+def test_debug_model_index_overflow(env: dict[str, str]) -> None:
+    result = run_clash(["debug", "-m", "99"], env, check=False)
+    assert result.returncode != 0
+    assert "超出范围" in result.stdout
+
+
 def test_rename_via_config(env: dict[str, str], idx: int, new_name: str) -> None:
     config_file = config_path(config_home(env), idx)
     content = config_file.read_text(encoding="utf-8")

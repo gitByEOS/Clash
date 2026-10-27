@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 编译 release 并发布到 bin/<platform>
+# 编译 release、发布平台产物并覆盖 PATH 中的 clash
+# 同一路径只处理一次，避免重复 PATH 入口导致重复覆盖
 
 set -euo pipefail
 
@@ -58,6 +59,31 @@ binary_name() {
     esac
 }
 
+unique_clash_paths() {
+    command -v which >/dev/null 2>&1 || return 0
+    which -a clash 2>/dev/null | awk 'NF && !seen[$0]++'
+}
+
+overwrite_path_binaries() {
+    local source="$1"
+    local target
+    local count=0
+
+    while IFS= read -r target; do
+        [[ "$target" == /* && -f "$target" && -x "$target" ]] || continue
+        [[ "$target" == "$source" ]] && continue
+
+        cp "$source" "$target"
+        chmod +x "$target"
+        ok "已覆盖本地: $target"
+        ((count += 1))
+    done < <(unique_clash_paths)
+
+    if (( count == 0 )); then
+        warn "未发现 PATH 中的 clash，跳过本地覆盖"
+    fi
+}
+
 publish_binary() {
     local out
     if [[ ! -f "$SOURCE" ]]; then
@@ -70,6 +96,7 @@ publish_binary() {
     cp "$SOURCE" "$out"
     chmod +x "$out"
     ok "已发布: $out"
+    overwrite_path_binaries "$out"
 }
 
 main() {

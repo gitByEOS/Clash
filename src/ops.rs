@@ -2,7 +2,7 @@ use crate::api_test;
 use crate::claude;
 use crate::claude_history::{self, SessionScope};
 use crate::cli::{print_cyan, print_green, print_red, print_yellow, ConfigSetArgs};
-use crate::config::{self, ClashConfig, ConfigSlot};
+use crate::config::{self, ClashConfig, RunModelChoice};
 use crate::crypto;
 use crate::hooks;
 use crate::model::{context_size_marker, remove_size_marker};
@@ -17,21 +17,6 @@ use std::path::PathBuf;
 use std::process::{self, Child, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-#[derive(Clone)]
-pub struct RunModelChoice {
-    pub label: String,
-    pub model: String,
-    pub config: ClashConfig,
-}
-
-pub fn account_label(slot: &ConfigSlot) -> String {
-    if let Some(name) = &slot.config.name {
-        name.clone()
-    } else {
-        format!("{}st", slot.idx + 1)
-    }
-}
 
 // ── version / update ────────────────────────────────────────
 
@@ -342,20 +327,18 @@ const DEBUG_DEFAULT_PORT: u16 = 11435;
 const MOCK_OLLAMA_CHECK_INTERVAL_SECS: u64 = 7 * 24 * 60 * 60;
 
 struct DebugArgs {
-    idx: Option<usize>,
-    model: Option<String>,
+    model_index: Option<usize>,
     host: String,
     port: u16,
     claude_args: Vec<String>,
 }
 
 fn debug_usage() -> &'static str {
-    "用法: clash debug [--idx <编号>] [--model <模型>] [--host <地址>] [--port <端口>] [-- <claude 参数>]"
+    "用法: clash debug [-m <模型编号>] [--host <地址>] [--port <端口>] [-- <claude 参数>]"
 }
 
 fn parse_debug_args(args: &[String]) -> Result<DebugArgs, String> {
-    let mut idx = None;
-    let mut model = None;
+    let mut model_index = None;
     let mut host = DEBUG_DEFAULT_HOST.to_string();
     let mut port = DEBUG_DEFAULT_PORT;
     let mut claude_args = Vec::new();
@@ -372,14 +355,13 @@ fn parse_debug_args(args: &[String]) -> Result<DebugArgs, String> {
             .ok_or_else(|| format!("{arg} 缺少值"))?
             .clone();
         match arg.as_str() {
-            "--idx" => {
-                idx = Some(
+            "-m" => {
+                model_index = Some(
                     value
                         .parse::<usize>()
-                        .map_err(|_| "--idx 必须是 0 或正整数".to_string())?,
-                )
+                        .map_err(|_| "-m 必须是正整数".to_string())?,
+                );
             }
-            "--model" => model = Some(value),
             "--host" => host = value,
             "--port" => {
                 port = value
@@ -392,8 +374,7 @@ fn parse_debug_args(args: &[String]) -> Result<DebugArgs, String> {
     }
 
     Ok(DebugArgs {
-        idx,
-        model,
+        model_index,
         host,
         port,
         claude_args,
@@ -417,7 +398,7 @@ pub fn do_rename(
     let labels: Vec<String> = slots
         .iter()
         .map(|slot| {
-            let current_name = account_label(slot);
+            let current_name = config::account_label(slot);
             let models_count = slot.config.models.len();
             format!("{}  ({} 个模型)", current_name, models_count)
         })
@@ -428,13 +409,13 @@ pub fn do_rename(
     let slot = slots
         .iter()
         .find(|slot| {
-            let current_name = account_label(slot);
+            let current_name = config::account_label(slot);
             let models_count = slot.config.models.len();
             format!("{}  ({} 个模型)", current_name, models_count) == selected_label
         })
         .ok_or(())?;
 
-    let current_name = account_label(slot);
+    let current_name = config::account_label(slot);
     print_cyan(&format!("当前名称: {}", current_name));
 
     let mut buf = String::new();
@@ -456,7 +437,7 @@ pub fn do_rename(
     let new_label = cfg
         .name
         .clone()
-        .unwrap_or_else(|| format!("{}st", slot.idx + 1));
+        .unwrap_or_else(|| config::ordinal(slot.idx + 1));
     print_green(&format!("账户已重命名为: {}", new_label));
 
     Ok(())
@@ -589,8 +570,8 @@ pub fn do_test(
             slots
                 .iter()
                 .find(|s| s.idx == idx)
-                .map(account_label)
-                .unwrap_or_else(|| format!("{}st", idx + 1))
+                .map(config::account_label)
+                .unwrap_or_else(|| config::ordinal(idx + 1))
         ));
         flush_stdout();
 
@@ -622,31 +603,8 @@ pub fn do_test(
 
 // ── select and run ─────────────────────────────────────────────────
 
-fn collect_run_choices() -> Result<Vec<RunModelChoice>, ()> {
-    let slots = config::read_config_slots().map_err(|_| ())?;
-    let is_multi_account = slots.len() > 1;
-    let mut choices = Vec::new();
-
-    for slot in slots {
-        for model in &slot.config.models {
-            let label = if is_multi_account {
-                format!("[{}]  {}", account_label(&slot), model)
-            } else {
-                model.clone()
-            };
-            choices.push(RunModelChoice {
-                label,
-                model: model.clone(),
-                config: slot.config.clone(),
-            });
-        }
-    }
-
-    Ok(choices)
-}
-
 fn load_run_choices() -> Result<Vec<RunModelChoice>, ()> {
-    let choices = collect_run_choices()?;
+    let choices = config::collect_run_choices().map_err(|_| ())?;
     if !choices.is_empty() {
         return Ok(choices);
     }
@@ -654,11 +612,11 @@ fn load_run_choices() -> Result<Vec<RunModelChoice>, ()> {
     print_yellow("未找到配置，请先配置厂商地址和 API Key");
     do_configure_interactive_for_idx(0)?;
 
-    let choices = collect_run_choices()?;
+    let choices = config::collect_run_choices().map_err(|_| ())?;
     if choices.is_empty() {
         print_red("配置不完整，请重新配置");
         do_configure_interactive_for_idx(0)?;
-        return collect_run_choices();
+        return config::collect_run_choices().map_err(|_| ());
     }
 
     Ok(choices)
@@ -696,69 +654,27 @@ fn select_run_choice_with_model_hint(model_hint: Option<&str>) -> Result<RunMode
 }
 
 fn select_debug_choice(args: &DebugArgs) -> Result<RunModelChoice, ()> {
-    if let Some(idx) = args.idx {
-        let config = config::read_config_for_idx(idx).map_err(|err| {
-            print_red(&format!("读取账户 idx={idx} 失败: {err}"));
-        })?;
-        if config.models.is_empty() {
-            print_red(&format!("账户 idx={idx} 未配置模型"));
-            return Err(());
-        }
-
-        let model = match &args.model {
-            Some(model) => model.clone(),
-            None if config.models.len() == 1 => config.models[0].clone(),
-            None => tui::select_model(&config.models).ok_or(())?,
-        };
-        let label = format!("[{}]  {}", idx, model);
-        return Ok(RunModelChoice {
-            label,
-            model,
-            config,
-        });
+    if args.model_index.is_none() {
+        return select_choice_from_list(load_run_choices()?);
     }
 
-    let choices = load_run_choices()?;
-    if let Some(model) = &args.model {
-        let normalized_model = remove_size_marker(model);
-        let matches = choices
-            .into_iter()
-            .filter(|choice| remove_size_marker(&choice.model) == normalized_model)
-            .collect::<Vec<_>>();
-        return match matches.len() {
-            0 => {
-                print_red(&format!("未找到模型: {model}"));
-                Err(())
-            }
-            1 => Ok(matches.into_iter().next().unwrap()),
-            _ => select_choice_from_list(matches),
-        };
-    }
-
-    select_choice_from_list(choices)
+    let choices = config::collect_run_choices().map_err(|_| {
+        print_red("未找到 Clash 配置，请先运行 clash config");
+    })?;
+    let labels: Vec<String> = choices.iter().map(|choice| choice.label.clone()).collect();
+    let index = config::resolve_choice_index(&labels, args.model_index).map_err(|err| {
+        print_red(&err);
+    })?;
+    Ok(choices.into_iter().nth(index).expect("resolve 已校验下标"))
 }
 
 fn set_claude_env(base_url: &str, auth_token: &str, model: &str, max_ctx: Option<u64>) {
-    env::set_var("ANTHROPIC_BASE_URL", base_url);
-    env::set_var("ANTHROPIC_AUTH_TOKEN", auth_token);
-    env::set_var("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
-    env::set_var("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1");
-    env::set_var("CLAUDE_CODE_ATTRIBUTION_HEADER", "0");
-    env::set_var("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
-    env::set_var("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
-    env::set_var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY", "3");
-    env::set_var("ENABLE_TOOL_SEARCH", "false");
-    env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", model);
-    env::set_var("ANTHROPIC_MODEL", model);
-    env::set_var("ANTHROPIC_SMALL_FAST_MODEL", model);
-    env::set_var("ANTHROPIC_DEFAULT_SONNET_MODEL", model);
-    env::set_var("ANTHROPIC_DEFAULT_OPUS_MODEL", model);
-    env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", model);
-    if let Some(max_ctx) = max_ctx {
-        env::set_var("CLAUDE_CODE_MAX_CONTEXT_TOKENS", max_ctx.to_string());
-    } else {
-        env::remove_var("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
-    }
+    claude::set_claude_env(&claude::ClaudeEnvSpec {
+        base_url,
+        auth_token,
+        model,
+        max_ctx,
+    });
 }
 
 enum LaunchMode {
@@ -1160,6 +1076,18 @@ pub fn do_select_and_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_debug_args_accepts_model_index() {
+        let args = parse_debug_args(&["-m".into(), "2".into()]).unwrap();
+        assert_eq!(args.model_index, Some(2));
+    }
+
+    #[test]
+    fn parse_debug_args_rejects_account_and_model_flags() {
+        assert!(parse_debug_args(&["--idx".into(), "1".into()]).is_err());
+        assert!(parse_debug_args(&["--model".into(), "m".into()]).is_err());
+    }
 
     #[test]
     fn new_launch_appends_system_prompt_and_keeps_extra_args() {
